@@ -1,0 +1,33 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+  model Room {
+    id         String   @id @default(cuid())
+    createdAt  DateTime @default(now())
+    hostId     String?  // optional user who created the room
+    isActive   Boolean  @default(true)
+    songs      Song[]   // relation to songs in this room
+  }
+
+  model Song {
+    id        String   @id @default(cuid())
+    title     String
+    url       String
+    addedBy   String
+    position  Int
+    roomId    String
+    room      Room     @relation(fields: [roomId], references: [id])
+  }

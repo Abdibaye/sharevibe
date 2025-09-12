@@ -1,0 +1,166 @@
+"use client";
+import React from "react";
+import RotatingThumbnail from "./RotatingThumbnail";
+import ProgressBar from "./ProgressBar";
+import PlaybackControls from "./PlaybackControls";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from "./ui/card";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Copy, ExternalLink, Music2, PlayCircle, Radio } from "lucide-react";
+
+type Song = {
+  title: string;
+  addedBy: string;
+  url?: string;
+  thumbnailUrl?: string;
+};
+
+type TimeDisplay = { current: string; total: string };
+
+export default function NowPlaying({
+  currentSong,
+  isPlaying,
+  progress,
+  timeDisplay,
+  onSeek,
+  onToggle,
+  volume,
+  onVolumeChange,
+  isYouTubeUrl,
+  audioRef,
+  ytPlayerDivRef,
+}: {
+  currentSong: Song | null;
+  isPlaying: boolean;
+  progress: number; // 0..1
+  timeDisplay: TimeDisplay;
+  onSeek: (pct: number) => void;
+  onToggle: () => void;
+  volume: number; // 0..1
+  onVolumeChange: (v: number) => void;
+  isYouTubeUrl: (url?: string) => boolean;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+  ytPlayerDivRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const srcType = currentSong?.url
+    ? isYouTubeUrl(currentSong.url)
+      ? "YouTube"
+      : currentSong.url.endsWith(".mp3")
+      ? "MP3"
+      : "Link"
+    : undefined;
+
+  const SrcIcon = !currentSong?.url
+    ? null
+    : isYouTubeUrl(currentSong.url)
+    ? PlayCircle
+    : currentSong.url.endsWith(".mp3")
+    ? Music2
+    : PlayCircle;
+
+  const handleCopy = async () => {
+    if (!currentSong?.url) return;
+    try {
+      await navigator.clipboard.writeText(currentSong.url);
+    } catch {}
+  };
+
+  return (
+    <Card className="flex-1  overflow-hidden">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-5">
+          <div className="relative">
+            <RotatingThumbnail
+              src={currentSong?.thumbnailUrl || undefined}
+              isPlaying={isPlaying}
+              alt={currentSong?.title || "No song"}
+              size={160}
+            />
+            {currentSong?.url && isYouTubeUrl(currentSong.url) && (
+              <div
+                ref={ytPlayerDivRef}
+                className="absolute -z-10 opacity-0 pointer-events-none"
+                style={{ width: 0, height: 0, overflow: "hidden" }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <CardTitle className="truncate">
+              {currentSong ? currentSong.title : "No song playing"}
+            </CardTitle>
+            <CardDescription className="mt-1 text-muted-foreground">
+              {currentSong ? `Added by ${currentSong.addedBy}` : "Select a song from the queue"}
+            </CardDescription>
+
+            <div className="mt-2 flex items-center gap-2">
+              {srcType && SrcIcon ? (
+                <Badge variant="secondary" className="gap-1">
+                  <SrcIcon className="h-3.5 w-3.5" />
+                  <span>{srcType}</span>
+                </Badge>
+              ) : null}
+              {isPlaying && (
+                <Badge variant="secondary" className="gap-1">
+                  <Radio className="h-3.5 w-3.5" />
+                  Live
+                </Badge>
+              )}
+            </div>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="pt-0">
+        <ProgressBar progress={progress} onSeek={onSeek} />
+        {currentSong?.url?.endsWith(".mp3") && (
+          <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground font-mono">
+            <span>{timeDisplay.current}</span>
+            <span>{timeDisplay.total}</span>
+          </div>
+        )}
+      </CardContent>
+
+      <CardFooter className="flex items-center justify-between gap-4 pt-0">
+        <PlaybackControls
+          isPlaying={isPlaying}
+          canToggle={!!(currentSong?.url && (currentSong.url.endsWith(".mp3") || isYouTubeUrl(currentSong.url)))}
+          onToggle={onToggle}
+          volume={volume}
+          onVolumeChange={onVolumeChange}
+        />
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleCopy}
+            disabled={!currentSong?.url}
+            title="Copy track link"
+          >
+            <Copy className="h-4 w-4 mr-2" />
+            Copy link
+          </Button>
+          {currentSong?.url ? (
+            <a href={currentSong.url} target="_blank" rel="noreferrer">
+              <Button variant="ghost" size="sm" title="Open in new tab">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open
+              </Button>
+            </a>
+          ) : null}
+        </div>
+      </CardFooter>
+
+      <audio ref={audioRef} className="hidden" preload="metadata" />
+    </Card>
+  );
+}
