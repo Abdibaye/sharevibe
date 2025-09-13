@@ -3,19 +3,30 @@ import React, { useState, useCallback, useRef, useEffect } from "react";
 import NowPlaying from "./NowPlaying";
 import ProgressBar from './ProgressBar';
 import PlaybackControls from './PlaybackControls';
+import { usePlayerStore, type Track } from "@/stores";
+import { enqueue } from "@/lib/queueClient";
+import { joinRoom } from "@/lib/roomClient";
+import { uuidv4 } from "@/lib/utils";
+import { useSearchParams } from "next/navigation";
+import { useSessionStore } from "@/stores/sessionStore";
+import { useRealtimeGuestRoom } from "@/hooks/useRealtimeGuestRoom";
 
 export default function RoomPage() {
-  const [queue, setQueue] = useState<{
-    title: string;
-    addedBy: string;
-    url?: string;
-    thumbnailUrl?: string;
-  }[]>([]);
-  const [currentSong, setCurrentSong] = useState<null | { title: string; addedBy: string; url?: string; thumbnailUrl?: string }>(null);
+  const queue = usePlayerStore((s) => s.queue)
+  const setCurrentGlobal = usePlayerStore((s) => s.setCurrent)
+  const session = useSessionStore()
+  const roomId = session.room?.id
+  const isGuest = session.isGuest()
+  const { publishNowPlaying } = useRealtimeGuestRoom(roomId)
+  const [currentSong, setCurrentSong] = useState<Track | null>(null);
   const [inputUrl, setInputUrl] = useState('');
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<null | { title: string; channelTitle: string; thumbnailUrl: string; duration: string }>(null);
+  const [results, setResults] = useState<
+    { videoId: string; title: string; channelTitle: string; thumbnailUrl: string; duration: string }[]
+  >([]);
+  const [searching, setSearching] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ytPlayerRef = useRef<any>(null); // YouTube Player instance
   const ytPlayerDivRef = useRef<HTMLDivElement | null>(null);
@@ -24,33 +35,7 @@ export default function RoomPage() {
   const [progress, setProgress] = useState(0); // 0..1
   const [timeDisplay, setTimeDisplay] = useState({ current: '0:00', total: '0:00' });
   const [volume, setVolume] = useState(1); // 0..1
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputUrl.trim()) return;
-    setAdding(true);
-    setError(null);
-    setPreview(null);
-    try {
-      const res = await fetch('/api/youtube-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: inputUrl.trim() })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      setPreview(data);
-      // Add immediately to queue placeholder (without persistence yet)
-  const newSong = { title: data.title, addedBy: 'You', url: inputUrl.trim(), thumbnailUrl: data.thumbnailUrl };
-  setQueue(q => [...q, newSong]);
-  if (!currentSong) setCurrentSong(newSong);
-      setInputUrl('');
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setAdding(false);
-    }
-  };
+  const currentFromStore = usePlayerStore((s) => s.current)
 
   const extractVideoId = useCallback((url?: string) => {
     if (!url) return null;
@@ -59,6 +44,105 @@ export default function RoomPage() {
   }, []);
 
   const isYouTubeUrl = (url?: string) => !!extractVideoId(url);
+
+  // Auto-join room via ?id= on mount (user: loads DB queue; guest: temp join)
+  const searchParams = useSearchParams()
+  useEffect(() => {
+    const id = searchParams.get('id')
+    if (!id) return
+    joinRoom(id).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Debounced YouTube search when input is not a URL
+  useEffect(() => {
+    const q = inputUrl.trim();
+    if (!q) {
+      setResults([]);
+      return;
+    }
+    if (isYouTubeUrl(q)) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/youtube-search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        if (Array.isArray(data)) setResults(data);
+        else setResults([]);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [inputUrl]);
+
+  const addVideoToQueue = async (v: { videoId: string; title: string; channelTitle: string; thumbnailUrl: string; duration: string }) => {
+    const url = `https://www.youtube.com/watch?v=${v.videoId}`;
+    const track: Track = { id: uuidv4(), title: v.title, artist: "You", url, thumbnailUrl: v.thumbnailUrl }
+    try {
+      await enqueue(track)
+      if (!currentSong) {
+        setCurrentSong(track)
+        setCurrentGlobal(track)
+      }
+      setPreview({ title: v.title, channelTitle: v.channelTitle, thumbnailUrl: v.thumbnailUrl, duration: v.duration });
+      setInputUrl("");
+      setResults([]);
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to add to queue')
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = inputUrl.trim();
+    if (!q) return;
+
+    // If it's a YouTube URL, use existing metadata flow
+    if (isYouTubeUrl(q)) {
+      setAdding(true);
+      setError(null);
+      setPreview(null);
+      try {
+        const res = await fetch("/api/youtube-metadata", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: q }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed");
+        setPreview(data);
+        const track: Track = { id: uuidv4(), title: data.title, artist: "You", url: q, thumbnailUrl: data.thumbnailUrl };
+        try {
+          await enqueue(track)
+          if (!currentSong) {
+            setCurrentSong(track)
+            setCurrentGlobal(track)
+          }
+        } catch (e: any) {
+          setError(e?.message ?? 'Failed to add to queue')
+        }
+        setInputUrl("");
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setAdding(false);
+      }
+      return;
+    }
+
+    // Otherwise treat as search: add the top result if available
+    if (results.length > 0) {
+      addVideoToQueue(results[0]);
+    } else {
+      setError("No results found.");
+    }
+  };
 
   // Load YouTube IFrame API once
   useEffect(() => {
@@ -145,8 +229,14 @@ export default function RoomPage() {
     };
   }, []);
 
-  const handleSelectSong = (song: { title: string; addedBy: string; url?: string; thumbnailUrl?: string }) => {
+  const handleSelectSong = (song: Track) => {
     setCurrentSong(song);
+    setCurrentGlobal(song)
+    // If guest temp room, broadcast nowPlaying based on YouTube ID
+  if (session.room?.type === 'temp' && song.url) {
+      const vid = extractVideoId(song.url)
+      if (vid) publishNowPlaying({ videoId: vid, timestamp: 0 })
+    }
     const url = song.url;
     // mp3 playback path
     if (url && url.endsWith('.mp3') && audioRef.current) {
@@ -181,6 +271,44 @@ export default function RoomPage() {
     setIsPlaying(false);
     setProgress(0);
   };
+
+  // Apply remote nowPlaying (store.current) to local playback
+  useEffect(() => {
+    const song = currentFromStore as Track | null | undefined
+    if (!song) return
+    if (currentSong && currentSong.id === song.id) return
+    setCurrentSong(song)
+    const url = song.url
+    if (url && url.endsWith('.mp3') && audioRef.current) {
+      if (ytPlayerRef.current) {
+        try { ytPlayerRef.current.stopVideo(); } catch {}
+        stopYtProgressTimer();
+      }
+      audioRef.current.src = url;
+      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+      return;
+    }
+    if (url && isYouTubeUrl(url)) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+      }
+      setIsPlaying(false);
+      setProgress(0);
+      const vid = extractVideoId(url);
+      if (vid) loadOrCreatePlayer(vid);
+      return;
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute('src');
+    }
+    if (ytPlayerRef.current) {
+      try { ytPlayerRef.current.stopVideo(); } catch {}
+    }
+    setIsPlaying(false);
+    setProgress(0);
+  }, [currentFromStore?.id])
 
   const togglePlay = () => {
     if (currentSong?.url?.endsWith('.mp3')) {
@@ -258,7 +386,7 @@ export default function RoomPage() {
       {/* Now Playing Section */}
       <section className="flex flex-col md:flex-row items-center md:items-start gap-6 px-6 py-4 z-10 relative">
         <NowPlaying
-          currentSong={currentSong}
+          currentSong={currentSong ? { ...currentSong, addedBy: currentSong.artist ?? (currentSong as any).addedBy } : null}
           isPlaying={isPlaying}
           progress={progress}
           timeDisplay={timeDisplay}
@@ -282,7 +410,7 @@ export default function RoomPage() {
           ) : (
             <ul className="space-y-3">
               {queue.map((item, idx) => {
-                const active = currentSong && currentSong.url === item.url && currentSong.title === item.title;
+                const active = currentSong && currentSong.id === item.id;
                 return (
                   <li
                     key={idx}
@@ -294,7 +422,7 @@ export default function RoomPage() {
                     )}
                     <div className="flex-1">
                       <span className="font-semibold block leading-tight truncate max-w-[180px]" title={item.title}>{item.title}</span>
-                      <span className="text-xs text-gray-400">Added by {item.addedBy}</span>
+                      <span className="text-xs text-gray-400">Added by {item.artist ?? 'Someone'}</span>
                     </div>
                     {active && <span className="text-xs text-green-400 font-semibold">Playing</span>}
                   </li>
@@ -312,7 +440,7 @@ export default function RoomPage() {
             type="text"
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
-            placeholder="Paste YouTube link..."
+            placeholder="Search YouTube or paste a link..."
             className="flex-1 px-4 py-3 rounded-lg bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500"
           />
           <button
@@ -320,10 +448,42 @@ export default function RoomPage() {
             disabled={adding}
             className="rounded-lg px-6 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 font-bold text-lg transition"
           >
-            {adding ? 'Adding...' : 'Add'}
+            {adding ? "Adding..." : "Add"}
           </button>
         </form>
+
+        {/* Live search suggestions */}
+        {!isYouTubeUrl(inputUrl) && (searching || results.length > 0) && (
+          <div className="w-full max-w-xl bg-gray-800/70 rounded-lg border border-gray-700 overflow-hidden">
+            {searching && (
+              <div className="px-4 py-2 text-sm text-gray-400">Searching...</div>
+            )}
+            {results.length > 0 && (
+              <ul className="max-h-80 overflow-y-auto divide-y divide-gray-700">
+                {results.map((v) => (
+                  <li key={v.videoId} className="flex items-center gap-3 p-3 hover:bg-gray-800">
+                    <img src={v.thumbnailUrl} alt={v.title} className="w-16 h-10 rounded object-cover" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate" title={v.title}>{v.title}</p>
+                      <p className="text-xs text-gray-400 truncate">{v.channelTitle}</p>
+                    </div>
+                    <span className="text-xs text-gray-400 mr-3">{v.duration}</span>
+                    <button
+                      onClick={() => addVideoToQueue(v)}
+                      className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-sm"
+                    >
+                      Add
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {error && <p className="text-sm text-red-400">{error}</p>}
+
+        {/* Keep preview of last added */}
         {preview && (
           <div className="w-full max-w-xl flex items-center gap-4 bg-gray-800/70 p-4 rounded-lg border border-gray-700">
             <img src={preview.thumbnailUrl} alt={preview.title} className="w-16 h-16 rounded object-cover" />

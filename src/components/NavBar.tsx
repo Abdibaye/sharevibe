@@ -6,6 +6,18 @@ import { Copy, Share2, Check } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
+import { useSessionStore } from "@/stores";
+import { createRoom, joinRoom } from "@/lib/roomClient";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogClose,
+} from "./ui/dialog";
 
 // Lightweight Google "G" icon (no extra dependency)
 const GoogleIcon = (props: React.SVGProps<SVGSVGElement>) => (
@@ -33,7 +45,8 @@ export default function NavBar({
   coffeeUrl = "https://buymeacoffee.com/yourname",
 }: NavBarProps) {
   const [copied, setCopied] = useState(false);
-  const effectiveRoomId = roomCode ?? "rvb-1234-ABCD"; // dummy ID for now
+  const sessionRoom = useSessionStore((s) => s.room)
+  const effectiveRoomId = sessionRoom?.id ?? roomCode ?? "no-room";
   const [isGooglePending, startGoogleTransition] = useTransition();
   const router = useRouter();
 
@@ -71,6 +84,41 @@ export default function NavBar({
     } catch {}
   };
 
+  const handleCreateRoom = async () => {
+    try {
+      const r = await createRoom()
+      // Optionally navigate to /room/[id]
+      // router.push(`/room?id=${r.id}`)
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const [joinOpen, setJoinOpen] = useState(false)
+  const [joinId, setJoinId] = useState("")
+  const [joinErr, setJoinErr] = useState<string | null>(null)
+  const [joinPending, setJoinPending] = useState(false)
+
+  const handleJoinSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    const id = joinId.trim()
+    if (!id) {
+      setJoinErr("Please enter a room ID")
+      return
+    }
+    setJoinPending(true)
+    setJoinErr(null)
+    try {
+      await joinRoom(id)
+      setJoinOpen(false)
+      // router.push(`/room?id=${id}`)
+    } catch (e) {
+      setJoinErr((e as Error).message)
+    } finally {
+      setJoinPending(false)
+    }
+  }
+
   const handleLoginWithGoogle = () => {
     startGoogleTransition(() => {
       authClient
@@ -94,6 +142,37 @@ export default function NavBar({
       <div className="flex items-center w-full">
         {/* Actions (right) */}
         <div className="ml-auto flex items-center gap-2">
+          {/* Room controls */}
+          <Button size="sm" variant="secondary" onClick={handleCreateRoom}>
+            Create Room
+          </Button>
+          <Dialog open={joinOpen} onOpenChange={setJoinOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">Join Room</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Join a room</DialogTitle>
+                <DialogDescription>Enter a room ID to join. Guests join a temporary room; users load DB-backed rooms.</DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleJoinSubmit} className="space-y-3">
+                <input
+                  value={joinId}
+                  onChange={(e) => setJoinId(e.target.value)}
+                  placeholder="e.g. 3f0f6f8c-..."
+                  className="w-full px-3 py-2 rounded-md bg-gray-800 text-white placeholder-gray-400 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-600"
+                />
+                {joinErr && <div className="text-sm text-red-400">{joinErr}</div>}
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button type="button" variant="ghost">Cancel</Button>
+                  </DialogClose>
+                  <Button type="submit" disabled={joinPending}>{joinPending ? "Joining…" : "Join"}</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
           {/* Room ID copy/share */}
           <Button
             size="sm"

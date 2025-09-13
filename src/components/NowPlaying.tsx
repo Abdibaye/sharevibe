@@ -17,9 +17,10 @@ import { Copy, ExternalLink, Music2, PlayCircle, Radio } from "lucide-react";
 
 type Song = {
   title: string;
-  addedBy: string;
   url?: string;
   thumbnailUrl?: string;
+  addedBy?: string;
+  artist?: string;
 };
 
 type TimeDisplay = { current: string; total: string };
@@ -98,7 +99,7 @@ export default function NowPlaying({
               {currentSong ? currentSong.title : "No song playing"}
             </CardTitle>
             <CardDescription className="mt-1 text-muted-foreground">
-              {currentSong ? `Added by ${currentSong.addedBy}` : "Select a song from the queue"}
+              {currentSong ? `Added by ${currentSong.addedBy ?? currentSong.artist ?? 'Someone'}` : "Select a song from the queue"}
             </CardDescription>
 
             <div className="mt-2 flex items-center gap-2">

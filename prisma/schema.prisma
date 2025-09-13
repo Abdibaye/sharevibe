@@ -42,6 +42,7 @@ model User {
   updatedAt     DateTime
   sessions      Session[]
   accounts      Account[]
+  playlists     Playlist[]
 
   @@unique([email])
   @@map("user")
@@ -90,4 +91,25 @@ model Verification {
   updatedAt  DateTime?
 
   @@map("verification")
+}
+
+model Playlist {
+  id        String        @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  items     PlaylistItem[]
+}
+
+model PlaylistItem {
+  id          String   @id @default(cuid())
+  title       String
+  url         String
+  addedBy     String?
+  thumbnailUrl String?
+  position    Int
+  playlistId  String
+  playlist    Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 }
