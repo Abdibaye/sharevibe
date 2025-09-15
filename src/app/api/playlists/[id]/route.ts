@@ -13,8 +13,8 @@ async function assertOwner(req: NextRequest, id: string) {
   return { status: 200 as const, userId }
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
   const pl = await prisma.playlist.findUnique({
     where: { id },
     include: { items: { orderBy: { position: 'asc' } } },
@@ -23,8 +23,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ playlist: pl })
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
   const authz = await assertOwner(req, id)
   if (authz.status !== 200) return authz.json
   const body = await req.json().catch(() => ({}))
@@ -34,8 +34,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return NextResponse.json({ playlist: pl })
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
   const authz = await assertOwner(req, id)
   if (authz.status !== 200) return authz.json
   await prisma.playlist.delete({ where: { id } })

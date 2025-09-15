@@ -4,8 +4,8 @@ import { auth } from '@/lib/auth'
 
 const prisma = new PrismaClient()
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: roomId } = params
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id: roomId } = await context.params
   const body = await req.json().catch(() => ({}))
   const { title, url, addedBy } = body as { title?: string; url?: string; addedBy?: string }
   if (!title || !url) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
@@ -33,8 +33,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ song }, { status: 201 })
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: roomId } = params
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id: roomId } = await context.params
   const body = await req.json().catch(() => ({}))
   const { songId } = body as { songId?: string }
   if (!songId) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })

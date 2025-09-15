@@ -13,8 +13,8 @@ async function assertOwner(req: NextRequest, id: string) {
   return { status: 200 as const, userId }
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: playlistId } = params
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id: playlistId } = await context.params
   const authz = await assertOwner(req, playlistId)
   if (authz.status !== 200) return authz.json
   const body = await req.json().catch(() => ({}))
@@ -30,8 +30,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ item }, { status: 201 })
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: playlistId } = params
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id: playlistId } = await context.params
   const authz = await assertOwner(req, playlistId)
   if (authz.status !== 200) return authz.json
   const itemId = new URL(req.url).searchParams.get('itemId')

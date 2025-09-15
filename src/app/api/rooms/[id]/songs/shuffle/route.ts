@@ -4,8 +4,8 @@ import { auth } from '@/lib/auth'
 
 const prisma = new PrismaClient()
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: roomId } = params
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id: roomId } = await context.params
 
   const session = await auth.api.getSession({ headers: req.headers as any }).catch(() => null as any)
   const userId = (session as any)?.user?.id ?? (session as any)?.session?.user?.id

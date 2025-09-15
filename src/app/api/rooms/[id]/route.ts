@@ -3,8 +3,8 @@ import { PrismaClient } from '@/generated/prisma'
 
 const prisma = new PrismaClient()
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { id } = params
+export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
   const room = await prisma.room.findUnique({
     where: { id },
     include: { songs: { orderBy: { position: 'asc' } } },
