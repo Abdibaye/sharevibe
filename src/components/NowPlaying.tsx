@@ -30,6 +30,7 @@ export default function NowPlaying({
   isPlaying,
   progress,
   timeDisplay,
+  totalSeconds,
   onSeek,
   onToggle,
   volume,
@@ -42,6 +43,7 @@ export default function NowPlaying({
   isPlaying: boolean;
   progress: number; // 0..1
   timeDisplay: TimeDisplay;
+  totalSeconds?: number;
   onSeek: (pct: number) => void;
   onToggle: () => void;
   volume: number; // 0..1
@@ -74,15 +76,15 @@ export default function NowPlaying({
   };
 
   return (
-    <Card className="flex-1  overflow-hidden">
+    <Card className="flex-1 overflow-hidden">
       <CardHeader className="pb-3">
-        <div className="flex items-center gap-5">
-          <div className="relative">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-5">
+          <div className="relative self-center sm:self-auto">
             <RotatingThumbnail
               src={currentSong?.thumbnailUrl || undefined}
               isPlaying={isPlaying}
               alt={currentSong?.title || "No song"}
-              size={160}
+              size={140}
             />
             {currentSong?.url && isYouTubeUrl(currentSong.url) && (
               <div
@@ -95,22 +97,22 @@ export default function NowPlaying({
           </div>
 
           <div className="min-w-0">
-            <CardTitle className="truncate">
+            <CardTitle className="truncate text-lg sm:text-xl">
               {currentSong ? currentSong.title : "No song playing"}
             </CardTitle>
-            <CardDescription className="mt-1 text-muted-foreground">
+            <CardDescription className="mt-1 text-muted-foreground text-sm sm:text-base">
               {currentSong ? `Added by ${currentSong.addedBy ?? currentSong.artist ?? 'Someone'}` : "Select a song from the queue"}
             </CardDescription>
 
             <div className="mt-2 flex items-center gap-2">
               {srcType && SrcIcon ? (
-                <Badge variant="secondary" className="gap-1">
+                <Badge variant="secondary" className="gap-1 py-0.5">
                   <SrcIcon className="h-3.5 w-3.5" />
                   <span>{srcType}</span>
                 </Badge>
               ) : null}
               {isPlaying && (
-                <Badge variant="secondary" className="gap-1">
+                <Badge variant="secondary" className="gap-1 py-0.5">
                   <Radio className="h-3.5 w-3.5" />
                   Live
                 </Badge>
@@ -121,16 +123,14 @@ export default function NowPlaying({
       </CardHeader>
 
       <CardContent className="pt-0">
-        <ProgressBar progress={progress} onSeek={onSeek} />
-        {currentSong?.url?.endsWith(".mp3") && (
-          <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground font-mono">
-            <span>{timeDisplay.current}</span>
-            <span>{timeDisplay.total}</span>
-          </div>
-        )}
+        <ProgressBar progress={progress} onSeek={onSeek} totalSeconds={totalSeconds} />
+        <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground font-mono">
+          <span>{timeDisplay.current}</span>
+          <span>{timeDisplay.total}</span>
+        </div>
       </CardContent>
 
-      <CardFooter className="flex items-center justify-between gap-4 pt-0">
+      <CardFooter className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-4 pt-0">
         <PlaybackControls
           isPlaying={isPlaying}
           canToggle={!!(currentSong?.url && (currentSong.url.endsWith(".mp3") || isYouTubeUrl(currentSong.url)))}
@@ -139,22 +139,23 @@ export default function NowPlaying({
           onVolumeChange={onVolumeChange}
         />
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
           <Button
             variant="secondary"
             size="sm"
             onClick={handleCopy}
             disabled={!currentSong?.url}
             title="Copy track link"
+            className="inline-flex items-center"
           >
-            <Copy className="h-4 w-4 mr-2" />
-            Copy link
+            <Copy className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Copy link</span>
           </Button>
           {currentSong?.url ? (
-            <a href={currentSong.url} target="_blank" rel="noreferrer">
-              <Button variant="ghost" size="sm" title="Open in new tab">
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Open
+            <a href={currentSong.url} target="_blank" rel="noreferrer" className="inline-flex">
+              <Button variant="ghost" size="sm" title="Open in new tab" className="inline-flex items-center">
+                <ExternalLink className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Open</span>
               </Button>
             </a>
           ) : null}

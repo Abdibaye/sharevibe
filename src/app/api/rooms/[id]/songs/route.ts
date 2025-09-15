@@ -32,3 +32,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   })
   return NextResponse.json({ song }, { status: 201 })
 }
+
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const { id: roomId } = params
+  const body = await req.json().catch(() => ({}))
+  const { songId } = body as { songId?: string }
+  if (!songId) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
+
+  const session = await auth.api.getSession({ headers: req.headers as any }).catch(() => null as any)
+  const userId = (session as any)?.user?.id ?? (session as any)?.session?.user?.id
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const song = await prisma.song.findFirst({ where: { id: songId, roomId } })
+  if (!song) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
+
+  await prisma.song.delete({ where: { id: songId } })
+
+  // Renumber remaining songs positions
+  const remaining = await prisma.song.findMany({ where: { roomId }, orderBy: { position: 'asc' } })
+  for (let i = 0; i < remaining.length; i++) {
+    if (remaining[i].position !== i + 1) {
+      await prisma.song.update({ where: { id: remaining[i].id }, data: { position: i + 1 } })
+    }
+  }
+  const ordered = await prisma.song.findMany({ where: { roomId }, orderBy: { position: 'asc' } })
+  return NextResponse.json({ songs: ordered })
+}

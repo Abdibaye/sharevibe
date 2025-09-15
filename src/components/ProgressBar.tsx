@@ -5,18 +5,37 @@ export default function ProgressBar({
   progress,
   onSeek,
   className = "",
+  totalSeconds,
 }: {
   progress: number; // 0..1
   onSeek: (pct: number) => void;
   className?: string;
+  totalSeconds?: number; // optional, used for hover time tooltip
 }) {
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  const [hoverPct, setHoverPct] = React.useState<number | null>(null)
+  const [isHovering, setIsHovering] = React.useState(false)
 
   const computeAndSeek = (clientX: number, el: HTMLDivElement) => {
     const rect = el.getBoundingClientRect();
     const pct = clamp((clientX - rect.left) / rect.width);
     onSeek(pct);
   };
+
+  const computeHover = (clientX: number, el: HTMLDivElement) => {
+    const rect = el.getBoundingClientRect();
+    const pct = clamp((clientX - rect.left) / rect.width);
+    setHoverPct(pct);
+  }
+
+  const fmt = (s: number) => {
+    if (!isFinite(s) || s < 0) return '0:00'
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const sec = Math.floor(s % 60).toString().padStart(2, '0')
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${sec}`
+    return `${m}:${sec}`
+  }
 
   const handleKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 0.1 : 0.02;
@@ -48,8 +67,11 @@ export default function ProgressBar({
         tabIndex={0}
         className="group h-3 cursor-pointer rounded-full border border-border/50 bg-muted/40 backdrop-blur-sm relative transition-colors hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onKeyDown={handleKey}
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => { setIsHovering(false); setHoverPct(null) }}
         onMouseDown={(e) => computeAndSeek(e.clientX, e.currentTarget)}
         onMouseMove={(e) => {
+          computeHover(e.clientX, e.currentTarget)
           if (e.buttons === 1) computeAndSeek(e.clientX, e.currentTarget);
         }}
         onTouchStart={(e) => computeAndSeek(e.touches[0].clientX, e.currentTarget)}
@@ -76,6 +98,16 @@ export default function ProgressBar({
           className="absolute top-1/2 h-4 w-4 md:h-5 md:w-5 -translate-y-1/2 translate-x-[-50%] rounded-full bg-background ring-2 ring-primary shadow-md opacity-0 group-hover:opacity-100 transition-transform duration-200 group-active:scale-105"
           style={{ left: `${pct}%` }}
         />
+
+        {/* Hover time tooltip */}
+        {isHovering && totalSeconds && hoverPct !== null ? (
+          <div
+            className="absolute -top-7 px-2 py-0.5 rounded bg-black/80 text-white text-[10px] md:text-xs pointer-events-none select-none whitespace-nowrap"
+            style={{ left: `${Math.round(hoverPct * 100)}%`, transform: 'translateX(-50%)' }}
+          >
+            {fmt(hoverPct * totalSeconds)}
+          </div>
+        ) : null}
       </div>
 
       {/* Optional percent label for screen readers */}

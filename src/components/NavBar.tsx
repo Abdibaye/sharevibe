@@ -1,8 +1,8 @@
 "use client";
-import React, { useState, useTransition } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "./ui/button";
-import { Copy, Share2, Check } from "lucide-react";
+import { Copy, Share2, Check, Menu } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
@@ -39,7 +39,7 @@ type NavBarProps = {
 
 export default function NavBar({
   title = "ShareVibe",
-  roomName = " Demo Room",
+  roomName = " Guest Room",
   roomCode,
   onCopy,
   coffeeUrl = "https://buymeacoffee.com/yourname",
@@ -47,7 +47,7 @@ export default function NavBar({
   const [copied, setCopied] = useState(false);
   const sessionRoom = useSessionStore((s) => s.room)
   const effectiveRoomId = sessionRoom?.id ?? roomCode ?? "no-room";
-  const [isGooglePending, startGoogleTransition] = useTransition();
+  const [isGooglePending, setIsGooglePending] = useState(false);
   const router = useRouter();
 
   // Session (shows avatar + first name if logged in)
@@ -58,7 +58,7 @@ export default function NavBar({
     user?.email?.split("@")?.[0] ??
     "User";
 
-  const handleCopy = async () => {
+  const handleCopy = async () => {    
     if (onCopy) return onCopy();
     try {
       await navigator.clipboard.writeText(effectiveRoomId);
@@ -119,29 +119,56 @@ export default function NavBar({
     }
   }
 
-  const handleLoginWithGoogle = () => {
-    startGoogleTransition(() => {
-      authClient
-        .signIn.social({
-          provider: "google",
-          callbackURL: "/room",
-        })
-        .catch((error: any) => {
-          console.error("Google sign-in error:", error);
-        });
-    });
+  const handleLoginWithGoogle = async () => {
+    try {
+      setIsGooglePending(true);
+      await authClient.signIn.social({
+        provider: "google",
+        callbackURL: "/room",
+      });
+      // Likely redirects; pending state will be irrelevant post-redirect
+    } catch (error: any) {
+      console.error("Google sign-in error:", error);
+    } finally {
+      setIsGooglePending(false);
+    }
   };
 
+  // Account dropdown
+  const [accountOpen, setAccountOpen] = useState(false)
+  const accountRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!accountRef.current) return
+      if (!accountRef.current.contains(e.target as Node)) setAccountOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [])
+
+  const handleLogout = async () => {
+    try {
+      await authClient.signOut()
+    } catch (e) {
+      // ignore
+    } finally {
+      try { useSessionStore.getState().reset() } catch {}
+      setAccountOpen(false)
+      router.push('/room')
+    }
+  }
+
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b border-border z-10 relative">
+    <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-border z-50 relative">
       <div className="flex items-center gap-2">
-        <div className="text-2xl font-bold tracking-wide">{title}</div>
-        {roomName && <Badge variant="outline">{roomName}</Badge>}
+        <div className="text-xl sm:text-2xl font-bold tracking-wide">{title}</div>
+        {roomName && <Badge variant="outline" className="hidden sm:inline-flex">{roomName}</Badge>}
       </div>
 
       <div className="flex items-center w-full">
         {/* Actions (right) */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto hidden md:flex items-center gap-2">
           {/* Room controls */}
           <Button size="sm" variant="secondary" onClick={handleCreateRoom}>
             Create Room
@@ -178,7 +205,7 @@ export default function NavBar({
             size="sm"
             variant="outline"
             onClick={handleCopy}
-            className="font-mono"
+            className="font-mono hidden lg:inline-flex"
             aria-label="Copy room ID"
             title="Copy room ID"
           >
@@ -202,8 +229,13 @@ export default function NavBar({
               <div className="h-4 w-16 rounded bg-muted animate-pulse" aria-hidden="true" />
             </div>
           ) : user ? (
-            <Button asChild size="sm" variant="ghost" className="pl-1 pr-2" aria-label="Account">
-              <Link href="/room" className="flex items-center gap-2">
+            <div className="relative" ref={accountRef}>
+              <button
+                className="flex items-center gap-2 pl-1 pr-2 h-9 rounded-md hover:bg-muted focus:outline-none border border-transparent"
+                onClick={() => setAccountOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={accountOpen}
+              >
                 <img
                   src={user?.image ?? "/avatar.png"}
                   alt={user?.name ?? "User"}
@@ -211,10 +243,32 @@ export default function NavBar({
                   className="h-8 w-8 rounded-full border"
                 />
                 <span className="text-sm font-medium">{firstName}</span>
-              </Link>
-            </Button>
+              </button>
+        {accountOpen && (
+                <div
+                  role="menu"
+          className="absolute right-0 mt-2 w-44 rounded-md border border-border bg-card shadow-md z-50 overflow-hidden"
+                >
+                  <Link
+                    href="/room"
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-muted"
+                    onClick={() => setAccountOpen(false)}
+                    role="menuitem"
+                  >
+                    Profile
+                  </Link>
+                  <button
+                    className="block w-full text-left px-3 py-2 text-sm hover:bg-muted text-red-400"
+                    onClick={handleLogout}
+                    role="menuitem"
+                  >
+                    Log out 
+                  </button>
+                </div>
+              )}
+            </div>
           ) : (
-            <Button variant="outline" onClick={handleLoginWithGoogle}>
+            <Button variant="outline" onClick={handleLoginWithGoogle} disabled={isGooglePending} aria-busy={isGooglePending}>
               <div className="flex items-center gap-2">
                 <GoogleIcon className="h-4 w-4" />
                 {isGooglePending ? "Signing in with Google..." : "Sign in with Google"}
@@ -223,7 +277,110 @@ export default function NavBar({
           )}
           {/* Removed Sign up button */}
         </div>
+
+        {/* Mobile menu trigger */}
+        <div className="ml-auto md:hidden">
+          <MobileMenu
+            onCreateRoom={handleCreateRoom}
+            onOpenJoin={() => setJoinOpen(true)}
+            onCopy={handleCopy}
+            onShare={handleShare}
+            user={user}
+            firstName={firstName}
+            onLogout={handleLogout}
+            isGooglePending={isGooglePending}
+            onLoginWithGoogle={handleLoginWithGoogle}
+            effectiveRoomId={effectiveRoomId}
+          />
+        </div>
       </div>
     </header>
   );
+}
+
+function MobileMenu({
+  onCreateRoom,
+  onOpenJoin,
+  onCopy,
+  onShare,
+  user,
+  firstName,
+  onLogout,
+  isGooglePending,
+  onLoginWithGoogle,
+  effectiveRoomId,
+}: {
+  onCreateRoom: () => void
+  onOpenJoin: () => void
+  onCopy: () => void
+  onShare: () => void
+  user: any
+  firstName: string
+  onLogout: () => void
+  isGooglePending: boolean
+  onLoginWithGoogle: () => void
+  effectiveRoomId: string
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button
+          aria-label="Open menu"
+          className="p-2 rounded-md border border-border hover:bg-muted"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Menu</DialogTitle>
+          <DialogDescription>Quick actions</DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3">
+          <Button onClick={() => { setOpen(false); onCreateRoom() }}>
+            Create Room
+          </Button>
+          <Button variant="outline" onClick={() => { setOpen(false); onOpenJoin() }}>
+            Join Room
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => { onCopy(); }} aria-label="Copy room ID" title="Copy room ID">
+              <Copy className="h-4 w-4 mr-2" />
+              Copy ID
+            </Button>
+            <Button variant="ghost" className="flex-1" onClick={() => { onShare(); }} aria-label="Share room" title="Share room">
+              <Share2 className="h-4 w-4 mr-2" />
+              Share
+            </Button>
+          </div>
+
+          {/* Auth */}
+          {user ? (
+            <div className="mt-2 border-t border-border pt-3">
+              <div className="flex items-center gap-3 mb-3">
+                <img src={user?.image ?? "/avatar.png"} alt={user?.name ?? "User"} className="h-8 w-8 rounded-full border" />
+                <div className="text-sm font-medium">{firstName}</div>
+              </div>
+              <Button variant="destructive" onClick={() => { setOpen(false); onLogout() }}>
+                Log out
+              </Button>
+            </div>
+          ) : (
+            <Button variant="outline" onClick={() => { setOpen(false); onLoginWithGoogle() }} disabled={isGooglePending} aria-busy={isGooglePending}>
+              <div className="flex items-center gap-2">
+                <GoogleIcon className="h-4 w-4" />
+                {isGooglePending ? "Signing in with Google..." : "Sign in with Google"}
+              </div>
+            </Button>
+          )}
+
+          <div className="text-xs text-muted-foreground mt-2">
+            Room: <span className="font-mono break-all">{effectiveRoomId}</span>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
 }

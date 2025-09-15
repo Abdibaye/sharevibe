@@ -28,10 +28,17 @@ export async function fetchYouTubeMetadata(youtubeUrl: string): Promise<{
     throw new Error('No video found for the provided ID');
   }
   const item = data.items[0];
+  const thumbs = item.snippet.thumbnails || {}
+  const thumbUrl =
+    thumbs.maxres?.url ||
+    thumbs.standard?.url ||
+    thumbs.high?.url ||
+    thumbs.medium?.url ||
+    thumbs.default?.url
   return {
     title: item.snippet.title,
     channelTitle: item.snippet.channelTitle,
-    thumbnailUrl: item.snippet.thumbnails.default.url,
+    thumbnailUrl: thumbUrl,
     duration: item.contentDetails.duration,
   };
 }

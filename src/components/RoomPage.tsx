@@ -4,12 +4,15 @@ import NowPlaying from "./NowPlaying";
 import ProgressBar from './ProgressBar';
 import PlaybackControls from './PlaybackControls';
 import { usePlayerStore, type Track } from "@/stores";
-import { enqueue } from "@/lib/queueClient";
+import { enqueue, removeFromQueue, shuffleQueue } from "@/lib/queueClient";
 import { joinRoom } from "@/lib/roomClient";
 import { uuidv4 } from "@/lib/utils";
 import { useSearchParams } from "next/navigation";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useRealtimeGuestRoom } from "@/hooks/useRealtimeGuestRoom";
+import { Shuffle as ShuffleIcon, Trash2, PlayCircle, Play, Pause } from "lucide-react";
+import { toast } from "sonner";
+import { authClient } from "@/lib/auth-client";
 
 export default function RoomPage() {
   const queue = usePlayerStore((s) => s.queue)
@@ -17,7 +20,7 @@ export default function RoomPage() {
   const session = useSessionStore()
   const roomId = session.room?.id
   const isGuest = session.isGuest()
-  const { publishNowPlaying } = useRealtimeGuestRoom(roomId)
+  const { publishNowPlaying, publishControl } = useRealtimeGuestRoom(roomId)
   const [currentSong, setCurrentSong] = useState<Track | null>(null);
   const [inputUrl, setInputUrl] = useState('');
   const [adding, setAdding] = useState(false);
@@ -34,8 +37,20 @@ export default function RoomPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0); // 0..1
   const [timeDisplay, setTimeDisplay] = useState({ current: '0:00', total: '0:00' });
+  const [totalSeconds, setTotalSeconds] = useState<number | undefined>(undefined);
   const [volume, setVolume] = useState(1); // 0..1
+  const [autoAdvance, setAutoAdvance] = useState(false)
   const currentFromStore = usePlayerStore((s) => s.current)
+  const control = usePlayerStore((s) => s.control)
+  const controlNonce = usePlayerStore((s) => s.controlNonce)
+  const lastAppliedControlRef = useRef<number>(0)
+  const autoAdvanceRef = useRef(false)
+  const queueRef = useRef(queue)
+  const currentSongRef = useRef<Track | null>(null)
+
+  useEffect(() => { autoAdvanceRef.current = autoAdvance }, [autoAdvance])
+  useEffect(() => { queueRef.current = queue }, [queue])
+  useEffect(() => { currentSongRef.current = currentSong }, [currentSong])
 
   const extractVideoId = useCallback((url?: string) => {
     if (!url) return null;
@@ -94,7 +109,19 @@ export default function RoomPage() {
       setInputUrl("");
       setResults([]);
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to add to queue')
+      const msg = e?.message ?? 'Failed to add to queue'
+      setError(msg)
+      if (msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('max')) {
+        toast("Queue limit reached", {
+          description: "Sign in to unlock a larger queue size.",
+          action: {
+            label: "Sign in",
+            onClick: () => {
+              try { authClient.signIn.social({ provider: 'google', callbackURL: '/room' }) } catch {}
+            }
+          }
+        })
+      }
     }
   };
 
@@ -125,7 +152,19 @@ export default function RoomPage() {
             setCurrentGlobal(track)
           }
         } catch (e: any) {
-          setError(e?.message ?? 'Failed to add to queue')
+          const msg = e?.message ?? 'Failed to add to queue'
+          setError(msg)
+          if (msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('max')) {
+            toast("Queue limit reached", {
+              description: "Sign in to unlock a larger queue size.",
+              action: {
+                label: "Sign in",
+                onClick: () => {
+                  try { authClient.signIn.social({ provider: 'google', callbackURL: '/room' }) } catch {}
+                }
+              }
+            })
+          }
         }
         setInputUrl("");
       } catch (err: any) {
@@ -156,6 +195,27 @@ export default function RoomPage() {
     document.body.appendChild(tag);
   }, []);
 
+  // Determine next track in queue
+  function getNextTrack(): Track | null {
+    const q = queueRef.current || []
+    const cur = currentSongRef.current
+    if (!q || q.length === 0) return null
+    if (!cur) return q[0] || null
+    const idx = q.findIndex((t) => t.id === cur.id)
+    if (idx === -1) return q[0] || null
+    return q[idx + 1] || null
+  }
+
+  // Play next track and broadcast nowPlaying for temp rooms
+  function playNext() {
+    const next = getNextTrack()
+    if (!next) {
+      setAutoAdvance(false)
+      return
+    }
+    handleSelectSong(next)
+  }
+
   // Helper to ensure player created
   const loadOrCreatePlayer = (videoId: string) => {
     if (!ytPlayerDivRef.current) return;
@@ -184,10 +244,13 @@ export default function RoomPage() {
             startYtProgressTimer();
           } else if (e.data === YTGlobal.PlayerState.PAUSED) {
             setIsPlaying(false);
+            // keep timer updating current/total while paused? we'll stop the timer but retain displayed times
           } else if (e.data === YTGlobal.PlayerState.ENDED) {
             setIsPlaying(false);
             setProgress(0);
             stopYtProgressTimer();
+            setTimeDisplay({ current: '0:00', total: '0:00' });
+            if (autoAdvanceRef.current) playNext();
           }
         }
       }
@@ -202,17 +265,17 @@ export default function RoomPage() {
       const cur = ytPlayerRef.current.getCurrentTime?.();
       if (dur && cur != null && dur > 0) {
         setProgress(cur / dur);
+        setTotalSeconds(dur);
         const fmt = (s: number) => {
           if (!isFinite(s)) return '0:00';
           const m = Math.floor(s / 60);
-            const sec = Math.floor(s % 60).toString().padStart(2, '0');
+          const sec = Math.floor(s % 60).toString().padStart(2, '0');
           return `${m}:${sec}`;
         };
         setTimeDisplay({ current: fmt(cur), total: fmt(dur) });
       }
     }, 500);
   };
-
   const stopYtProgressTimer = () => {
     if (ytProgressTimerRef.current) {
       clearInterval(ytProgressTimerRef.current);
@@ -246,6 +309,7 @@ export default function RoomPage() {
       }
       audioRef.current.src = url;
       audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+  // update time display while playing mp3 via audio events (already handled below)
       return;
     }
     // YouTube
@@ -257,7 +321,20 @@ export default function RoomPage() {
       setIsPlaying(false);
       setProgress(0);
       const vid = extractVideoId(url);
-      if (vid) loadOrCreatePlayer(vid);
+      if (vid) {
+        loadOrCreatePlayer(vid);
+        // If remote provided a startAt, seek after a short delay
+        const startAt = (song as any).startAt as number | undefined
+        if (startAt && startAt > 0) {
+          setTimeout(() => {
+            try {
+              if (ytPlayerRef.current?.seekTo) {
+                ytPlayerRef.current.seekTo(startAt, true)
+              }
+            } catch {}
+          }, 600);
+        }
+      }
       return;
     }
     // Neither mp3 nor YouTube
@@ -268,8 +345,9 @@ export default function RoomPage() {
     if (ytPlayerRef.current) {
       try { ytPlayerRef.current.stopVideo(); } catch {}
     }
-    setIsPlaying(false);
-    setProgress(0);
+  setIsPlaying(false);
+  setProgress(0);
+  setTotalSeconds(undefined);
   };
 
   // Apply remote nowPlaying (store.current) to local playback
@@ -295,6 +373,7 @@ export default function RoomPage() {
       }
       setIsPlaying(false);
       setProgress(0);
+      setTotalSeconds(undefined);
       const vid = extractVideoId(url);
       if (vid) loadOrCreatePlayer(vid);
       return;
@@ -308,6 +387,7 @@ export default function RoomPage() {
     }
     setIsPlaying(false);
     setProgress(0);
+    setTotalSeconds(undefined);
   }, [currentFromStore?.id])
 
   const togglePlay = () => {
@@ -316,8 +396,12 @@ export default function RoomPage() {
       if (isPlaying) {
         audioRef.current.pause();
         setIsPlaying(false);
+  // broadcast pause
+  if (session.room?.type === 'temp') publishControl({ action: 'pause', timestamp: ytPlayerRef.current?.getCurrentTime?.() || audioRef.current.currentTime || 0 })
       } else {
         audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+  // broadcast play
+  if (session.room?.type === 'temp') publishControl({ action: 'play', timestamp: audioRef.current.currentTime || 0 })
       }
     } else if (currentSong?.url && isYouTubeUrl(currentSong.url) && ytPlayerRef.current) {
       const state = ytPlayerRef.current.getPlayerState?.();
@@ -325,9 +409,11 @@ export default function RoomPage() {
       if (state === YTGlobal.PlayerState.PLAYING) {
         ytPlayerRef.current.pauseVideo();
         setIsPlaying(false);
+  if (session.room?.type === 'temp') publishControl({ action: 'pause', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
       } else {
         ytPlayerRef.current.playVideo();
         setIsPlaying(true);
+  if (session.room?.type === 'temp') publishControl({ action: 'play', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
       }
     }
   };
@@ -344,10 +430,16 @@ export default function RoomPage() {
   const applySeek = (pct: number) => {
     setProgress(pct);
     if (currentSong?.url?.endsWith('.mp3') && audioRef.current && audioRef.current.duration) {
-      audioRef.current.currentTime = pct * audioRef.current.duration;
+      const t = pct * audioRef.current.duration
+      audioRef.current.currentTime = t;
+      if (session.room?.type === 'temp') publishControl({ action: 'seek', timestamp: t })
     } else if (currentSong?.url && isYouTubeUrl(currentSong.url) && ytPlayerRef.current) {
       const dur = ytPlayerRef.current.getDuration?.();
-      if (dur) ytPlayerRef.current.seekTo(pct * dur, true);
+      if (dur) {
+        const t = pct * dur
+        ytPlayerRef.current.seekTo(t, true);
+        if (session.room?.type === 'temp') publishControl({ action: 'seek', timestamp: t })
+      }
     }
   };
 
@@ -357,6 +449,7 @@ export default function RoomPage() {
     const onTime = () => {
       if (!el.duration || isNaN(el.duration)) return;
       setProgress(el.currentTime / el.duration);
+  setTotalSeconds(el.duration);
       const fmt = (s: number) => {
         if (!isFinite(s)) return '0:00';
         const m = Math.floor(s / 60);
@@ -368,6 +461,9 @@ export default function RoomPage() {
     const onEnded = () => {
       setIsPlaying(false);
       setProgress(0);
+      setTimeDisplay({ current: '0:00', total: '0:00' });
+      setTotalSeconds(undefined);
+      if (autoAdvanceRef.current) playNext();
     };
     el.addEventListener('timeupdate', onTime);
     el.addEventListener('ended', onEnded);
@@ -376,6 +472,39 @@ export default function RoomPage() {
       el.removeEventListener('ended', onEnded);
     };
   }, [currentSong]);
+
+  // Apply remote control updates
+  useEffect(() => {
+    // Ignore if same message already applied
+    if (!control || lastAppliedControlRef.current === controlNonce) return
+    lastAppliedControlRef.current = controlNonce
+    const ts = Math.max(0, control.timestamp || 0)
+    if (currentSong?.url?.endsWith('.mp3')) {
+      if (!audioRef.current) return
+      if (control.action === 'pause') {
+        audioRef.current.pause()
+        setIsPlaying(false)
+        if (!isNaN(ts)) audioRef.current.currentTime = ts
+      } else if (control.action === 'play') {
+        if (!isNaN(ts)) audioRef.current.currentTime = ts
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
+      } else if (control.action === 'seek') {
+        if (!isNaN(ts)) audioRef.current.currentTime = ts
+      }
+    } else if (currentSong?.url && isYouTubeUrl(currentSong.url) && ytPlayerRef.current) {
+      if (control.action === 'pause') {
+        try { ytPlayerRef.current.pauseVideo() } catch {}
+        setIsPlaying(false)
+        if (!isNaN(ts)) ytPlayerRef.current.seekTo?.(ts, true)
+      } else if (control.action === 'play') {
+        if (!isNaN(ts)) ytPlayerRef.current.seekTo?.(ts, true)
+        try { ytPlayerRef.current.playVideo() } catch {}
+        setIsPlaying(true)
+      } else if (control.action === 'seek') {
+        if (!isNaN(ts)) ytPlayerRef.current.seekTo?.(ts, true)
+      }
+    }
+  }, [controlNonce])
 
   return (
     <div
@@ -390,6 +519,7 @@ export default function RoomPage() {
           isPlaying={isPlaying}
           progress={progress}
           timeDisplay={timeDisplay}
+          totalSeconds={totalSeconds}
           onSeek={applySeek}
           onToggle={togglePlay}
           volume={volume}
@@ -398,17 +528,58 @@ export default function RoomPage() {
           audioRef={audioRef}
           ytPlayerDivRef={ytPlayerDivRef}
         />
-        <div className="flex-1 w-full max-w-md rounded-xl p-6 shadow-lg overflow-y-auto max-h-96 bg-card border border-border">
+    <div className="flex-1 w-full md:max-w-md rounded-xl p-4 md:p-6 shadow-lg overflow-y-auto max-h-[50vh] md:max-h-96 bg-card border border-border">
           {/* Queue Section */}
-          <h3 className="text-xl font-bold mb-4">Queue</h3>
+          <div className="flex items-center justify-between mb-4">
+      <h3 className="text-lg md:text-xl font-bold">Queue</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (!autoAdvance) {
+                    // Start Play All mode and begin playback
+                    setAutoAdvance(true)
+                    if (currentSong) {
+                      if (!isPlaying) togglePlay()
+                    } else if (queue.length > 0) {
+                      handleSelectSong(queue[0])
+                    }
+                  } else {
+                    // In Play All mode: toggle play/pause only
+                    if (currentSong) {
+                      togglePlay()
+                    } else if (queue.length > 0) {
+                      handleSelectSong(queue[0])
+                    }
+                  }
+                }}
+                className={`p-2 rounded bg-gray-700 hover:bg-gray-600 ${autoAdvance && isPlaying ? 'ring-2 ring-green-500' : ''}`}
+                aria-label={autoAdvance && isPlaying ? 'Pause all' : 'Play all'}
+                title={autoAdvance && isPlaying ? 'Pause all' : 'Play all'}
+              >
+                {autoAdvance && isPlaying ? (
+                  <Pause className="h-4 w-4" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+              </button>
+              <button
+                onClick={() => shuffleQueue().catch(() => {})}
+                className="p-2 rounded bg-gray-700 hover:bg-gray-600"
+                aria-label="Shuffle queue"
+                title="Shuffle queue"
+              >
+                <ShuffleIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
           {queue.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
+            <div className="flex flex-col items-center justify-center h-32 md:h-40 text-muted-foreground">
               <span className="text-4xl mb-2">🎶</span>
               <span className="font-semibold">No songs in queue</span>
               <span className="text-sm mt-1">Add a YouTube link below to start the vibe!</span>
             </div>
           ) : (
-            <ul className="space-y-3">
+            <ul className="space-y-2 md:space-y-3">
               {queue.map((item, idx) => {
                 const active = currentSong && currentSong.id === item.id;
                 return (
@@ -418,13 +589,25 @@ export default function RoomPage() {
                     className={`flex items-center gap-3 rounded-lg px-4 py-2 cursor-pointer transition border ${active ? 'bg-gray-700 border-gray-500' : 'bg-gray-900 hover:bg-gray-800 border-transparent'}`}
                   >
                     {item.thumbnailUrl && (
-                      <img src={item.thumbnailUrl} alt={item.title} className="w-12 h-12 rounded object-cover" />
+                      <img src={item.thumbnailUrl} alt={item.title} className="w-10 h-10 md:w-12 md:h-12 rounded object-cover" />
                     )}
                     <div className="flex-1">
-                      <span className="font-semibold block leading-tight truncate max-w-[180px]" title={item.title}>{item.title}</span>
-                      <span className="text-xs text-gray-400">Added by {item.artist ?? 'Someone'}</span>
+                      <span className="font-semibold block leading-tight truncate text-sm md:text-base max-w-[140px] md:max-w-[180px]" title={item.title}>{item.title}</span>
+                      <span className="text-[10px] md:text-xs text-gray-400">Added by {item.artist ?? 'Someone'}</span>
                     </div>
-                    {active && <span className="text-xs text-green-400 font-semibold">Playing</span>}
+                    <div className="flex flex-col items-center gap-3">
+                      {active && isPlaying && (
+                        <span className="text-[10px] md:text-xs text-green-400 font-semibold">Playing</span>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeFromQueue(item.id).catch(() => {}) }}
+                        className="p-2 rounded bg-gray-800 hover:bg-gray-700"
+                        aria-label="Remove from queue"
+                        title="Remove from queue"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </li>
                 );
               })}

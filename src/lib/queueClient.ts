@@ -28,3 +28,60 @@ export async function enqueue(track: Track) {
     return
   }
 }
+
+export async function removeFromQueue(id: string) {
+  const { isGuest, isUser, room } = useSessionStore.getState()
+  const player = usePlayerStore.getState()
+  if (!room) throw new Error('No active room')
+
+  if (isGuest() || room.type === 'temp') {
+    player.dequeue(id)
+    return
+  }
+
+  if (isUser() && room.type === 'db') {
+    const res = await fetch(`/api/rooms/${room.id}/songs`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ songId: id }),
+    })
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      throw new Error(j?.error ?? 'Failed to remove song')
+    }
+    const data = await res.json()
+    const tracks: Track[] = (data.songs ?? []).map((s: any) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
+    player.setQueue(tracks)
+    return
+  }
+}
+
+export async function shuffleQueue() {
+  const { isGuest, isUser, room } = useSessionStore.getState()
+  const player = usePlayerStore.getState()
+  if (!room) throw new Error('No active room')
+
+  if (isGuest() || room.type === 'temp') {
+    const arr = [...player.queue]
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const tmp = arr[i]
+      arr[i] = arr[j]
+      arr[j] = tmp
+    }
+    player.setQueue(arr)
+    return
+  }
+
+  if (isUser() && room.type === 'db') {
+    const res = await fetch(`/api/rooms/${room.id}/songs/shuffle`, { method: 'POST' })
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      throw new Error(j?.error ?? 'Failed to shuffle')
+    }
+    const data = await res.json()
+    const tracks: Track[] = (data.songs ?? []).map((s: any) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
+    player.setQueue(tracks)
+    return
+  }
+}

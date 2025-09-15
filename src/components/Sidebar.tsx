@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { authClient } from "@/lib/auth-client";
 
 type Item = {
   label: string;
@@ -51,22 +52,39 @@ function Section({ title, items }: { title: string; items: Item[] }) {
 }
 
 export default function Sidebar() {
+  const { data: session } = authClient.useSession?.() ?? { data: null };
+  const user = (session as any)?.user ?? (session as any)?.session?.user;
+  const signedIn = !!user;
+
   return (
     <aside
-      className="hidden md:flex w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-900/50"
+      className="hidden md:flex w-64 shrink-0 flex-col border-r border-gray-800 bg-gray-900/50 relative"
       aria-label="Sidebar"
     >
-      <div className="p-4">
-        <div className="rounded-lg bg-gray-800/60 p-3 text-sm">
+      {/* Sidebar content */}
+      <div className={`p-4 ${!signedIn ? "pointer-events-none select-none" : ""}`}>
+        <div className={`rounded-lg bg-gray-800/60 p-3 text-sm ${!signedIn ? "opacity-90" : ""}`}>
           <p className="text-gray-300">
             Explore upcoming features like Communities and Discover. Stay tuned!
           </p>
         </div>
 
-        <Section title="Now" items={primary} />
-        <Section title="Explore" items={explore} />
-        <Section title="App" items={app} />
+        <div className={!signedIn ? "filter blur-[1px]" : undefined}>
+          <Section title="Now" items={primary} />
+          <Section title="Explore" items={explore} />
+          <Section title="App" items={app} />
+        </div>
       </div>
+
+      {/* Signed-out overlay */}
+      {!signedIn && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 backdrop-blur-[2px] px-4 text-center">
+          <div className="space-y-1">
+            <p className="text-sm text-gray-200">Sign in to access the sidebar features.</p>
+            <p className="text-xs text-gray-300/80">Your communities, queue tools, and more await.</p>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
