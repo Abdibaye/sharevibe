@@ -3,6 +3,9 @@
 import { useSessionStore } from '@/stores/sessionStore'
 import { usePlayerStore, Track } from '@/stores/playerStore'
 
+type DbSong = { id: string; title: string; url: string; addedBy: string }
+type SongsResponse = { songs?: DbSong[] }
+
 export async function enqueue(track: Track) {
   const { isGuest, isUser, room } = useSessionStore.getState()
   const player = usePlayerStore.getState()
@@ -49,8 +52,8 @@ export async function removeFromQueue(id: string) {
       const j = await res.json().catch(() => ({}))
       throw new Error(j?.error ?? 'Failed to remove song')
     }
-    const data = await res.json()
-    const tracks: Track[] = (data.songs ?? []).map((s: any) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
+  const data: SongsResponse = await res.json()
+  const tracks: Track[] = (data.songs ?? []).map((s) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
     player.setQueue(tracks)
     return
   }
@@ -79,8 +82,8 @@ export async function shuffleQueue() {
       const j = await res.json().catch(() => ({}))
       throw new Error(j?.error ?? 'Failed to shuffle')
     }
-    const data = await res.json()
-    const tracks: Track[] = (data.songs ?? []).map((s: any) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
+  const data: SongsResponse = await res.json()
+  const tracks: Track[] = (data.songs ?? []).map((s) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
     player.setQueue(tracks)
     return
   }

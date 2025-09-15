@@ -34,7 +34,7 @@ type ControlEvent = {
  * - Apply incoming events to local store
  */
 export function useRealtimeGuestRoom(roomId?: string | null) {
-  const { room, isGuest } = useSessionStore()
+  const { room } = useSessionStore()
   const getState = usePlayerStore
   const setQueue = usePlayerStore((s) => s.setQueue)
   const queue = usePlayerStore((s) => s.queue)
@@ -83,7 +83,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
     // Handle incoming queue updates
   channel.on('broadcast', { event: 'queue:update' }, async (payload: unknown) => {
       try {
-        const env = (payload as any).payload as EventEnvelope<QueuePayload>
+        const env = (payload as { payload?: EventEnvelope<QueuePayload> } | null)?.payload as EventEnvelope<QueuePayload>
         if (!env || env.senderId === sid) return
         const ids = (env.data.videoIds || []).slice(0, getState.getState().maxQueueSize)
         const existing = getState.getState().queue
@@ -98,7 +98,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
               body: JSON.stringify({ ids: uncached }),
             })
             if (res.ok) {
-              const map = await res.json()
+              const map = (await res.json()) as Record<string, { title?: string; channelTitle?: string; thumbnailUrl?: string }>
               for (const vid of Object.keys(map || {})) {
                 const m = map[vid]
                 if (m?.title) metaCacheRef.current.set(vid, { title: m.title, channelTitle: m.channelTitle, thumbnailUrl: m.thumbnailUrl })
@@ -130,7 +130,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   // Handle nowPlaying updates
   channel.on('broadcast', { event: 'nowPlaying:update' }, async (payload: unknown) => {
       try {
-        const env = (payload as any).payload as EventEnvelope<NowPlayingPayload>
+        const env = (payload as { payload?: EventEnvelope<NowPlayingPayload> } | null)?.payload as EventEnvelope<NowPlayingPayload>
         if (!env || env.senderId === sid) return
         const { videoId, timestamp } = env.data
         const current = getState.getState().current
@@ -151,15 +151,15 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
     })
 
     // Handle control updates (play/pause/seek)
-    channel.on('broadcast', { event: 'control:update' }, (payload: unknown) => {
+  channel.on('broadcast', { event: 'control:update' }, (payload: unknown) => {
       try {
-        const env = (payload as any).payload as EventEnvelope<ControlEvent>
+    const env = (payload as { payload?: EventEnvelope<ControlEvent> } | null)?.payload as EventEnvelope<ControlEvent>
         if (!env || env.senderId === sid) return
         setControl(env.data)
       } catch {}
     })
 
-  channel.subscribe((_status: unknown) => {
+  channel.subscribe(() => {
       // noop; could log status
     })
 
@@ -167,7 +167,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
       try { supabase.removeChannel(channel) } catch {}
       channelRef.current = null
     }
-  }, [activeRoomId, room?.type, getState, setQueue])
+  }, [activeRoomId, room?.type, getState, setQueue, setControl])
 
   // Broadcast queue whenever it changes locally
   useEffect(() => {

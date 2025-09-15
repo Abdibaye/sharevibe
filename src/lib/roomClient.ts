@@ -4,7 +4,7 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { usePlayerStore, Track } from '@/stores/playerStore'
 import { uuidv4 } from './utils'
 
-type CreateRoomOptions = {}
+type CreateRoomOptions = Record<string, never>
 
 export async function createRoom(_opts?: CreateRoomOptions) {
   const { isGuest, setRoom, isUser } = useSessionStore.getState()
@@ -51,7 +51,8 @@ export async function joinRoom(id: string) {
     const data = await res.json()
     setRoom({ id: data.room.id, type: 'db' })
     // Map DB songs to Track and set into queue
-    const tracks: Track[] = (data.room.songs ?? []).map((s: any) => ({
+  type DbSong = { id: string; title: string; url: string; addedBy: string }
+  const tracks: Track[] = (data.room.songs ?? []).map((s: DbSong) => ({
       id: s.id,
       title: s.title,
       url: s.url,
