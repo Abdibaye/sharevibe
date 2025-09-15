@@ -1,10 +1,13 @@
+"use client";
+
 import RoomPage from '@/components/RoomPage'
-import React from 'react'
+import React, { Suspense } from 'react'
 
 export default function page() {
   return (
-    <div>
+     <Suspense fallback={<div>Loading...</div>}>
       <RoomPage />
-    </div>
+    </Suspense>
+
   )
 }
