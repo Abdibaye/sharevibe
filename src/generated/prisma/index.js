@@ -221,6 +221,10 @@ const config = {
         "fromEnvVar": null,
         "value": "debian-openssl-3.0.x",
         "native": true
+      },
+      {
+        "fromEnvVar": null,
+        "value": "rhel-openssl-3.0.x"
       }
     ],
     "previewFeatures": [],
@@ -238,6 +242,7 @@ const config = {
     "db"
   ],
   "activeProvider": "postgresql",
+  "postinstall": false,
   "inlineDatasources": {
     "db": {
       "url": {
@@ -246,8 +251,8 @@ const config = {
       }
     }
   },
-  "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\n// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?\n// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init\n\ngenerator client {\n  provider = \"prisma-client-js\"\n  output   = \"../src/generated/prisma\"\n}\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\nmodel Room {\n  id        String   @id @default(cuid())\n  createdAt DateTime @default(now())\n  hostId    String? // optional user who created the room\n  isActive  Boolean  @default(true)\n  songs     Song[] // relation to songs in this room\n}\n\nmodel Song {\n  id       String @id @default(cuid())\n  title    String\n  url      String\n  addedBy  String\n  position Int\n  roomId   String\n  room     Room   @relation(fields: [roomId], references: [id])\n}\n\nmodel User {\n  id            String     @id\n  name          String\n  email         String\n  emailVerified Boolean\n  image         String?\n  createdAt     DateTime\n  updatedAt     DateTime\n  sessions      Session[]\n  accounts      Account[]\n  playlists     Playlist[]\n\n  @@unique([email])\n  @@map(\"user\")\n}\n\nmodel Session {\n  id        String   @id\n  expiresAt DateTime\n  token     String\n  createdAt DateTime\n  updatedAt DateTime\n  ipAddress String?\n  userAgent String?\n  userId    String\n  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([token])\n  @@map(\"session\")\n}\n\nmodel Account {\n  id                    String    @id\n  accountId             String\n  providerId            String\n  userId                String\n  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)\n  accessToken           String?\n  refreshToken          String?\n  idToken               String?\n  accessTokenExpiresAt  DateTime?\n  refreshTokenExpiresAt DateTime?\n  scope                 String?\n  password              String?\n  createdAt             DateTime\n  updatedAt             DateTime\n\n  @@map(\"account\")\n}\n\nmodel Verification {\n  id         String    @id\n  identifier String\n  value      String\n  expiresAt  DateTime\n  createdAt  DateTime?\n  updatedAt  DateTime?\n\n  @@map(\"verification\")\n}\n\nmodel Playlist {\n  id        String         @id @default(cuid())\n  name      String\n  ownerId   String\n  owner     User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)\n  createdAt DateTime       @default(now())\n  updatedAt DateTime       @updatedAt\n  items     PlaylistItem[]\n}\n\nmodel PlaylistItem {\n  id           String   @id @default(cuid())\n  title        String\n  url          String\n  addedBy      String?\n  thumbnailUrl String?\n  position     Int\n  playlistId   String\n  playlist     Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)\n}\n",
-  "inlineSchemaHash": "1e19d7ba7f8d2daba52e89e333e44b4e49993d3cdcb4efc6ee5c3c7bdc283197",
+  "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\n// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?\n// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init\n\ngenerator client {\n  provider      = \"prisma-client-js\"\n  output        = \"../src/generated/prisma\"\n  binaryTargets = [\"native\", \"rhel-openssl-3.0.x\"]\n}\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\nmodel Room {\n  id        String   @id @default(cuid())\n  createdAt DateTime @default(now())\n  hostId    String? // optional user who created the room\n  isActive  Boolean  @default(true)\n  songs     Song[] // relation to songs in this room\n}\n\nmodel Song {\n  id       String @id @default(cuid())\n  title    String\n  url      String\n  addedBy  String\n  position Int\n  roomId   String\n  room     Room   @relation(fields: [roomId], references: [id])\n}\n\nmodel User {\n  id            String     @id\n  name          String\n  email         String\n  emailVerified Boolean\n  image         String?\n  createdAt     DateTime\n  updatedAt     DateTime\n  sessions      Session[]\n  accounts      Account[]\n  playlists     Playlist[]\n\n  @@unique([email])\n  @@map(\"user\")\n}\n\nmodel Session {\n  id        String   @id\n  expiresAt DateTime\n  token     String\n  createdAt DateTime\n  updatedAt DateTime\n  ipAddress String?\n  userAgent String?\n  userId    String\n  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([token])\n  @@map(\"session\")\n}\n\nmodel Account {\n  id                    String    @id\n  accountId             String\n  providerId            String\n  userId                String\n  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)\n  accessToken           String?\n  refreshToken          String?\n  idToken               String?\n  accessTokenExpiresAt  DateTime?\n  refreshTokenExpiresAt DateTime?\n  scope                 String?\n  password              String?\n  createdAt             DateTime\n  updatedAt             DateTime\n\n  @@map(\"account\")\n}\n\nmodel Verification {\n  id         String    @id\n  identifier String\n  value      String\n  expiresAt  DateTime\n  createdAt  DateTime?\n  updatedAt  DateTime?\n\n  @@map(\"verification\")\n}\n\nmodel Playlist {\n  id        String         @id @default(cuid())\n  name      String\n  ownerId   String\n  owner     User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)\n  createdAt DateTime       @default(now())\n  updatedAt DateTime       @updatedAt\n  items     PlaylistItem[]\n}\n\nmodel PlaylistItem {\n  id           String   @id @default(cuid())\n  title        String\n  url          String\n  addedBy      String?\n  thumbnailUrl String?\n  position     Int\n  playlistId   String\n  playlist     Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)\n}\n",
+  "inlineSchemaHash": "c5437a761d68d0cf76adcd90c8c9f6207e6ff228d9753464e5558c19449afc00",
   "copyEngine": true
 }
 
@@ -288,6 +293,10 @@ Object.assign(exports, Prisma)
 // file annotations for bundling tools to include these files
 path.join(__dirname, "libquery_engine-debian-openssl-3.0.x.so.node");
 path.join(process.cwd(), "src/generated/prisma/libquery_engine-debian-openssl-3.0.x.so.node")
+
+// file annotations for bundling tools to include these files
+path.join(__dirname, "libquery_engine-rhel-openssl-3.0.x.so.node");
+path.join(process.cwd(), "src/generated/prisma/libquery_engine-rhel-openssl-3.0.x.so.node")
 // file annotations for bundling tools to include these files
 path.join(__dirname, "schema.prisma");
 path.join(process.cwd(), "src/generated/prisma/schema.prisma")
