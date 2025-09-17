@@ -27,6 +27,8 @@ type ControlEvent = {
   timestamp?: number // seconds at which to seek or current position
 }
 
+type SyncRequest = { req: true }
+
 /**
  * Join a Supabase Realtime channel for a guest room and sync Zustand state.
  * - Broadcast queue changes (max 3 enforced by store)
@@ -38,11 +40,13 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   const getState = usePlayerStore
   const setQueue = usePlayerStore((s) => s.setQueue)
   const queue = usePlayerStore((s) => s.queue)
+  const current = usePlayerStore((s) => s.current)
   const setControl = usePlayerStore((s) => s.setControl)
 
   const senderIdRef = useRef<string>(uuidv4())
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const muteBroadcastRef = useRef(false)
+  const muteNowPlayingBroadcastRef = useRef(false)
   // simple in-memory cache for fetched metadata by videoId
   const metaCacheRef = useRef<Map<string, { title: string; thumbnailUrl?: string; channelTitle?: string }>>(new Map())
 
@@ -146,7 +150,10 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
           // Let UI seek after player loads
           startAt: typeof timestamp === 'number' ? Math.max(0, timestamp) : 0,
         }
+        // Prevent rebroadcast loop when applying remote nowPlaying
+        muteNowPlayingBroadcastRef.current = true
         getState.getState().setCurrent(track)
+        setTimeout(() => { muteNowPlayingBroadcastRef.current = false }, 0)
       } catch {}
     })
 
@@ -159,8 +166,44 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
       } catch {}
     })
 
+    // Handle sync requests from newly-joined clients
+    channel.on('broadcast', { event: 'sync:request' }, (payload: unknown) => {
+      try {
+        const env = (payload as { payload?: EventEnvelope<SyncRequest> } | null)?.payload as EventEnvelope<SyncRequest>
+        if (!env || env.senderId === sid) return
+        // Reply with our current queue and nowPlaying if available
+        const st = getState.getState()
+        const ids = (st.queue || [])
+          .map((t: Track) => t.url?.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/)?.[1])
+          .filter(Boolean) as string[]
+        if (ids.length) {
+          channel.send({
+            type: 'broadcast',
+            event: 'queue:update',
+            payload: { senderId: sid, data: { videoIds: ids } as QueuePayload } as EventEnvelope<QueuePayload>,
+          })
+        }
+        const cur = st.current
+        const vid = cur?.url?.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/)?.[1]
+        if (vid) {
+          channel.send({
+            type: 'broadcast',
+            event: 'nowPlaying:update',
+            payload: { senderId: sid, data: { videoId: vid, timestamp: (cur as any)?.startAt || 0 } as NowPlayingPayload } as EventEnvelope<NowPlayingPayload>,
+          })
+        }
+      } catch {}
+    })
+
   channel.subscribe(() => {
-      // noop; could log status
+      // On join, request sync from peers
+      try {
+        channel.send({
+          type: 'broadcast',
+          event: 'sync:request',
+          payload: { senderId: sid, data: { req: true } as SyncRequest } as EventEnvelope<SyncRequest>,
+        })
+      } catch {}
     })
 
     return () => {
@@ -184,6 +227,21 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
       payload: { senderId: sid, data: { videoIds: ids } as QueuePayload } as EventEnvelope<QueuePayload>,
     })
   }, [queue, activeRoomId, room?.type])
+
+  // Broadcast nowPlaying whenever local current changes (guest/temp rooms)
+  useEffect(() => {
+    const isTemp = room?.type === 'temp'
+    if (!isTemp || !activeRoomId) return
+    if (muteNowPlayingBroadcastRef.current) return
+    const sid = senderIdRef.current
+    const vid = current?.url?.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/)?.[1]
+    if (!vid) return
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'nowPlaying:update',
+      payload: { senderId: sid, data: { videoId: vid, timestamp: (current as any)?.startAt || 0 } as NowPlayingPayload } as EventEnvelope<NowPlayingPayload>,
+    })
+  }, [current?.id, activeRoomId, room?.type])
 
   // Expose helpers for publishing nowPlaying explicitly
   const publishNowPlaying = useMemo(() => (params: NowPlayingPayload) => {

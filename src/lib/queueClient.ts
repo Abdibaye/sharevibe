@@ -43,6 +43,11 @@ export async function removeFromQueue(id: string) {
   }
 
   if (isUser() && room.type === 'db') {
+    // Capture previous queue ordering to select the correct next track if current is removed
+    const prevQueue = [...player.queue]
+    const wasCurrent = player.current?.id === id
+    const removedIdx = prevQueue.findIndex((t) => t.id === id)
+    const nextCandidateId = removedIdx >= 0 ? prevQueue[removedIdx + 1]?.id : undefined
     const res = await fetch(`/api/rooms/${room.id}/songs`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -52,9 +57,14 @@ export async function removeFromQueue(id: string) {
       const j = await res.json().catch(() => ({}))
       throw new Error(j?.error ?? 'Failed to remove song')
     }
-  const data: SongsResponse = await res.json()
-  const tracks: Track[] = (data.songs ?? []).map((s) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
-    player.setQueue(tracks)
+    const data: SongsResponse = await res.json()
+    const tracks: Track[] = (data.songs ?? []).map((s) => ({ id: s.id, title: s.title, url: s.url, artist: s.addedBy }))
+    // If we removed the current, advance to the track that followed it previously, or fall back to the first
+    const nextTrack = wasCurrent ? (tracks.find((t) => t.id === nextCandidateId) ?? tracks[0] ?? null) : (usePlayerStore.getState().current ?? null)
+    usePlayerStore.setState((s) => ({
+      queue: tracks,
+      current: wasCurrent ? nextTrack : (s.current ?? null),
+    }))
     return
   }
 }

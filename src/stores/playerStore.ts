@@ -55,8 +55,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set({ queue: [...s.queue, track] })
     return true
   },
-  dequeue: (id) => set((s) => ({ queue: s.queue.filter((t) => t.id !== id) })),
-  clearQueue: () => set({ queue: [] }),
+  dequeue: (id) =>
+    set((s) => {
+      const idx = s.queue.findIndex((t) => t.id === id)
+      const newQueue = s.queue.filter((t) => t.id !== id)
+      // If the removed track is the one currently playing, move to the next item (or clear)
+      let newCurrent = s.current ?? null
+      if (s.current && s.current.id === id) {
+        const next = idx >= 0 ? s.queue[idx + 1] ?? null : null
+        newCurrent = next
+      }
+      return { queue: newQueue, current: newCurrent }
+    }),
+  clearQueue: () => set((s) => ({ queue: [], current: null })),
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
   toggle: () => set({ isPlaying: !get().isPlaying }),

@@ -35,6 +35,8 @@ export default function RoomPage() {
   const ytPlayerDivRef = useRef<HTMLDivElement | null>(null);
   const ytProgressTimerRef = useRef<any>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoadingPlayback, setIsLoadingPlayback] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const [progress, setProgress] = useState(0); // 0..1
   const [timeDisplay, setTimeDisplay] = useState({ current: '0:00', total: '0:00' });
   const [totalSeconds, setTotalSeconds] = useState<number | undefined>(undefined);
@@ -101,9 +103,9 @@ export default function RoomPage() {
     const track: Track = { id: uuidv4(), title: v.title, artist: "You", url, thumbnailUrl: v.thumbnailUrl }
     try {
       await enqueue(track)
+      // If nothing is playing, immediately start playback; otherwise just enqueue
       if (!currentSong) {
-        setCurrentSong(track)
-        setCurrentGlobal(track)
+        handleSelectSong(track)
       }
       setPreview({ title: v.title, channelTitle: v.channelTitle, thumbnailUrl: v.thumbnailUrl, duration: v.duration });
       setInputUrl("");
@@ -148,8 +150,8 @@ export default function RoomPage() {
         try {
           await enqueue(track)
           if (!currentSong) {
-            setCurrentSong(track)
-            setCurrentGlobal(track)
+            // Immediately start playback for first track
+            handleSelectSong(track)
           }
         } catch (e: any) {
           const msg = e?.message ?? 'Failed to add to queue'
@@ -217,16 +219,37 @@ export default function RoomPage() {
   }
 
   // Helper to ensure player created
-  const loadOrCreatePlayer = (videoId: string) => {
-    if (!ytPlayerDivRef.current) return;
+  const loadOrCreatePlayer = (videoId: string, opts?: { userInitiated?: boolean }) => {
+    if (!ytPlayerDivRef.current) {
+      // Container not yet in the DOM; retry soon
+      setTimeout(() => loadOrCreatePlayer(videoId, opts), 50);
+      return;
+    }
     const YTGlobal = (window as any).YT;
     if (!YTGlobal || !YTGlobal.Player) {
       // Retry shortly until API ready
-      setTimeout(() => loadOrCreatePlayer(videoId), 300);
+      setTimeout(() => loadOrCreatePlayer(videoId, opts), 300);
       return;
     }
     if (ytPlayerRef.current) {
-      ytPlayerRef.current.loadVideoById(videoId);
+      try {
+        ytPlayerRef.current.loadVideoById(videoId);
+      } catch {
+        // If load fails due to stale instance, recreate the player safely
+        try { ytPlayerRef.current.destroy?.() } catch {}
+        ytPlayerRef.current = null
+        // Retry creation after a tick
+        setTimeout(() => loadOrCreatePlayer(videoId, opts), 0)
+        return
+      }
+      // For programmatic starts (e.g., remote sync on join), use muted autoplay to satisfy policies
+      if (!opts?.userInitiated) {
+        try { ytPlayerRef.current.mute?.(); setIsMuted(true); } catch {}
+        try { ytPlayerRef.current.playVideo?.() } catch {}
+      } else {
+        // User initiated: ensure unmuted
+        try { ytPlayerRef.current.unMute?.(); setIsMuted(false); } catch {}
+      }
       return;
     }
     ytPlayerRef.current = new YTGlobal.Player(ytPlayerDivRef.current, {
@@ -238,19 +261,32 @@ export default function RoomPage() {
         playsinline: 1,
       },
       events: {
+        onReady: () => {
+          if (!opts?.userInitiated) {
+            try { ytPlayerRef.current?.mute?.(); setIsMuted(true); } catch {}
+            try { ytPlayerRef.current?.playVideo?.() } catch {}
+          } else {
+            try { ytPlayerRef.current?.unMute?.(); setIsMuted(false); } catch {}
+          }
+        },
         onStateChange: (e: any) => {
           if (e.data === YTGlobal.PlayerState.PLAYING) {
             setIsPlaying(true);
+            setIsLoadingPlayback(false);
             startYtProgressTimer();
           } else if (e.data === YTGlobal.PlayerState.PAUSED) {
             setIsPlaying(false);
+            setIsLoadingPlayback(false);
             // keep timer updating current/total while paused? we'll stop the timer but retain displayed times
           } else if (e.data === YTGlobal.PlayerState.ENDED) {
             setIsPlaying(false);
+            setIsLoadingPlayback(false);
             setProgress(0);
             stopYtProgressTimer();
             setTimeDisplay({ current: '0:00', total: '0:00' });
             if (autoAdvanceRef.current) playNext();
+          } else if (e.data === YTGlobal.PlayerState.BUFFERING) {
+            setIsLoadingPlayback(true);
           }
         }
       }
@@ -287,7 +323,8 @@ export default function RoomPage() {
     return () => {
       stopYtProgressTimer();
       if (ytPlayerRef.current) {
-        try { ytPlayerRef.current.destroy(); } catch {}
+        try { ytPlayerRef.current.destroy?.(); } catch {}
+        ytPlayerRef.current = null
       }
     };
   }, []);
@@ -308,7 +345,11 @@ export default function RoomPage() {
         stopYtProgressTimer();
       }
       audioRef.current.src = url;
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+      setIsLoadingPlayback(true);
+      audioRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false))
+        .finally(() => setIsLoadingPlayback(false));
   // update time display while playing mp3 via audio events (already handled below)
       return;
     }
@@ -322,7 +363,8 @@ export default function RoomPage() {
       setProgress(0);
       const vid = extractVideoId(url);
       if (vid) {
-        loadOrCreatePlayer(vid);
+        setIsLoadingPlayback(true);
+        loadOrCreatePlayer(vid, { userInitiated: true });
         // If remote provided a startAt, seek after a short delay
         const startAt = (song as any).startAt as number | undefined
         if (startAt && startAt > 0) {
@@ -348,13 +390,63 @@ export default function RoomPage() {
   setIsPlaying(false);
   setProgress(0);
   setTotalSeconds(undefined);
+  setIsLoadingPlayback(false);
   };
 
-  // Apply remote nowPlaying (store.current) to local playback
+  // Apply remote nowPlaying (store.current) to local playback, including null -> stop
   useEffect(() => {
-    const song = currentFromStore as Track | null | undefined
-    if (!song) return
-    if (currentSong && currentSong.id === song.id) return
+    const song = (currentFromStore as Track | null | undefined) ?? null
+    // If store cleared current, stop playback and reset UI
+    if (!song) {
+      setCurrentSong(null)
+      setIsPlaying(false)
+      setProgress(0)
+      setTimeDisplay({ current: '0:00', total: '0:00' })
+      setTotalSeconds(undefined)
+      setIsMuted(false)
+      if (audioRef.current) {
+        try { audioRef.current.pause() } catch {}
+        try { audioRef.current.removeAttribute('src') } catch {}
+      }
+      if (ytPlayerRef.current) {
+        try { ytPlayerRef.current.stopVideo?.() } catch {}
+        stopYtProgressTimer()
+      }
+      setIsLoadingPlayback(false)
+      return
+    }
+    // If it's the same song but we're paused, try to (re)start playback
+    if (currentSong && currentSong.id === song.id) {
+      const urlSame = song.url
+      if (!isPlaying) {
+        if (urlSame && urlSame.endsWith('.mp3') && audioRef.current) {
+          if (!audioRef.current.src || !audioRef.current.src.includes(urlSame)) {
+            audioRef.current.src = urlSame
+          }
+          setIsLoadingPlayback(true)
+          audioRef.current.play()
+            .then(() => setIsPlaying(true))
+            .catch(() => setIsPlaying(false))
+            .finally(() => setIsLoadingPlayback(false))
+        } else if (urlSame && isYouTubeUrl(urlSame)) {
+          const vid = extractVideoId(urlSame)
+          if (vid) {
+            if (ytPlayerRef.current) {
+              try {
+                setIsLoadingPlayback(true);
+                ytPlayerRef.current.mute?.();
+                setIsMuted(true);
+                ytPlayerRef.current.playVideo?.();
+              } catch {}
+            } else {
+              setIsLoadingPlayback(true)
+              loadOrCreatePlayer(vid, { userInitiated: false })
+            }
+          }
+        }
+      }
+      return
+    }
     setCurrentSong(song)
     const url = song.url
     if (url && url.endsWith('.mp3') && audioRef.current) {
@@ -362,8 +454,14 @@ export default function RoomPage() {
         try { ytPlayerRef.current.stopVideo(); } catch {}
         stopYtProgressTimer();
       }
+      setIsMuted(false);
+      setIsMuted(false);
       audioRef.current.src = url;
-      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+      setIsLoadingPlayback(true)
+      audioRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false))
+        .finally(() => setIsLoadingPlayback(false))
       return;
     }
     if (url && isYouTubeUrl(url)) {
@@ -375,7 +473,7 @@ export default function RoomPage() {
       setProgress(0);
       setTotalSeconds(undefined);
       const vid = extractVideoId(url);
-      if (vid) loadOrCreatePlayer(vid);
+      if (vid) { setIsLoadingPlayback(true); loadOrCreatePlayer(vid, { userInitiated: false }); }
       return;
     }
     if (audioRef.current) {
@@ -383,12 +481,13 @@ export default function RoomPage() {
       audioRef.current.removeAttribute('src');
     }
     if (ytPlayerRef.current) {
-      try { ytPlayerRef.current.stopVideo(); } catch {}
+      try { ytPlayerRef.current.stopVideo?.(); } catch {}
     }
     setIsPlaying(false);
     setProgress(0);
     setTotalSeconds(undefined);
-  }, [currentFromStore?.id])
+    setIsLoadingPlayback(false)
+  }, [currentFromStore])
 
   const togglePlay = () => {
     if (currentSong?.url?.endsWith('.mp3')) {
@@ -399,7 +498,11 @@ export default function RoomPage() {
   // broadcast pause
   if (session.room?.type === 'temp') publishControl({ action: 'pause', timestamp: ytPlayerRef.current?.getCurrentTime?.() || audioRef.current.currentTime || 0 })
       } else {
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+        setIsLoadingPlayback(true)
+        audioRef.current.play()
+          .then(() => setIsPlaying(true))
+          .catch(() => setIsPlaying(false))
+          .finally(() => setIsLoadingPlayback(false))
   // broadcast play
   if (session.room?.type === 'temp') publishControl({ action: 'play', timestamp: audioRef.current.currentTime || 0 })
       }
@@ -409,8 +512,12 @@ export default function RoomPage() {
       if (state === YTGlobal.PlayerState.PLAYING) {
         ytPlayerRef.current.pauseVideo();
         setIsPlaying(false);
+        setIsLoadingPlayback(false)
   if (session.room?.type === 'temp') publishControl({ action: 'pause', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
       } else {
+        setIsLoadingPlayback(true)
+        // User initiated toggle: ensure unmuted
+        try { ytPlayerRef.current.unMute?.(); setIsMuted(false); } catch {}
         ytPlayerRef.current.playVideo();
         setIsPlaying(true);
   if (session.room?.type === 'temp') publishControl({ action: 'play', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
@@ -425,6 +532,20 @@ export default function RoomPage() {
       ytPlayerRef.current.setVolume(Math.round(volume * 100));
     }
   }, [volume]);
+
+  const handleToggleMute = () => {
+    const p = ytPlayerRef.current
+    if (!p) return
+    try {
+      if (p.isMuted?.()) {
+        p.unMute?.()
+        setIsMuted(false)
+      } else {
+        p.mute?.()
+        setIsMuted(true)
+      }
+    } catch {}
+  }
 
   // Replace the old handleSeek with a pct-based seeker
   const applySeek = (pct: number) => {
@@ -517,11 +638,14 @@ export default function RoomPage() {
         <NowPlaying
           currentSong={currentSong ? { ...currentSong, addedBy: currentSong.artist ?? (currentSong as any).addedBy } : null}
           isPlaying={isPlaying}
+          isLoading={isLoadingPlayback}
+          isMuted={isMuted}
           progress={progress}
           timeDisplay={timeDisplay}
           totalSeconds={totalSeconds}
           onSeek={applySeek}
           onToggle={togglePlay}
+          onToggleMute={handleToggleMute}
           volume={volume}
           onVolumeChange={setVolume}
           isYouTubeUrl={isYouTubeUrl}
