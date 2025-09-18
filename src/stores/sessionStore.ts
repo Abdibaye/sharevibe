@@ -39,7 +39,7 @@ export const useSessionStore = create<SessionState>()(
       setGuest: () => {
         set({ mode: 'guest', user: null })
         // Enforce guest limits
-        usePlayerStore.getState().setMaxQueueSize(3)
+        usePlayerStore.getState().setMaxQueueSize(5)
       },
       setUser: (user) => {
         set({ mode: 'user', user })
@@ -51,7 +51,7 @@ export const useSessionStore = create<SessionState>()(
       isUser: () => get().mode === 'user',
       reset: () => {
         set({ mode: 'guest', room: null, user: null })
-        usePlayerStore.getState().setMaxQueueSize(3)
+        usePlayerStore.getState().setMaxQueueSize(5)
         usePlayerStore.getState().clearQueue()
       },
     }),
