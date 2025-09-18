@@ -44,7 +44,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   isPlaying: false,
   volume: 0.9,
   progress: 0,
-  maxQueueSize: 3, // default for guests; session store will bump to 20 for users
+  maxQueueSize: 5, // default for guests; session store will bump to 20 for users
   control: null,
   controlNonce: 0,
   setCurrent: (track) => set({ current: track, progress: 0 }),
