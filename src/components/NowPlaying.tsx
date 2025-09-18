@@ -28,11 +28,14 @@ type TimeDisplay = { current: string; total: string };
 export default function NowPlaying({
   currentSong,
   isPlaying,
+  isLoading,
+  isMuted,
   progress,
   timeDisplay,
   totalSeconds,
   onSeek,
   onToggle,
+  onToggleMute,
   volume,
   onVolumeChange,
   isYouTubeUrl,
@@ -41,11 +44,14 @@ export default function NowPlaying({
 }: {
   currentSong: Song | null;
   isPlaying: boolean;
+  isLoading?: boolean;
+  isMuted?: boolean;
   progress: number; // 0..1
   timeDisplay: TimeDisplay;
   totalSeconds?: number;
   onSeek: (pct: number) => void;
   onToggle: () => void;
+  onToggleMute?: () => void;
   volume: number; // 0..1
   onVolumeChange: (v: number) => void;
   isYouTubeUrl: (url?: string) => boolean;
@@ -86,14 +92,12 @@ export default function NowPlaying({
               alt={currentSong?.title || "No song"}
               size={140}
             />
-            {currentSong?.url && isYouTubeUrl(currentSong.url) && (
-              <div
-                ref={ytPlayerDivRef}
-                className="absolute -z-10 opacity-0 pointer-events-none"
-                style={{ width: 0, height: 0, overflow: "hidden" }}
-                aria-hidden="true"
-              />
-            )}
+            <div
+              ref={ytPlayerDivRef}
+              className="absolute -z-10 opacity-0 pointer-events-none"
+              style={{ width: 0, height: 0, overflow: "hidden" }}
+              aria-hidden="true"
+            />
           </div>
 
           <div className="min-w-0">
@@ -133,8 +137,11 @@ export default function NowPlaying({
       <CardFooter className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-4 pt-0">
         <PlaybackControls
           isPlaying={isPlaying}
+          isLoading={isLoading}
+          isMuted={isMuted}
           canToggle={!!(currentSong?.url && (currentSong.url.endsWith(".mp3") || isYouTubeUrl(currentSong.url)))}
           onToggle={onToggle}
+          onToggleMute={onToggleMute}
           volume={volume}
           onVolumeChange={onVolumeChange}
         />
