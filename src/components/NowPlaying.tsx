@@ -147,17 +147,7 @@ export default function NowPlaying({
         />
 
         <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleCopy}
-            disabled={!currentSong?.url}
-            title="Copy track link"
-            className="inline-flex items-center"
-          >
-            <Copy className="h-4 w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Copy link</span>
-          </Button>
+          
           {currentSong?.url ? (
             <a href={currentSong.url} target="_blank" rel="noreferrer" className="inline-flex">
               <Button variant="ghost" size="sm" title="Open in new tab" className="inline-flex items-center">
