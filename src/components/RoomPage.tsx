@@ -54,6 +54,41 @@ export default function RoomPage() {
   useEffect(() => { queueRef.current = queue }, [queue])
   useEffect(() => { currentSongRef.current = currentSong }, [currentSong])
 
+  // Persist guest (temp) room queue/current in localStorage and restore on refresh
+  const STORAGE_KEY = 'guest-room-state'
+  useEffect(() => {
+    const room = session.room
+    if (!room || room.type !== 'temp') return
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw) as { roomId?: string; queue?: Track[]; currentId?: string }
+      if (saved.roomId !== room.id) return
+      if (Array.isArray(saved.queue) && saved.queue.length) {
+        usePlayerStore.getState().setQueue(saved.queue)
+        const cur = saved.currentId ? saved.queue.find(t => t.id === saved.currentId) ?? null : null
+        if (cur) {
+          setCurrentGlobal(cur)
+          setCurrentSong(cur)
+        }
+      }
+    } catch {}
+  // run when room changes
+  }, [session.room?.id, session.room?.type])
+
+  useEffect(() => {
+    const room = session.room
+    if (!room || room.type !== 'temp') return
+    try {
+      const payload = {
+        roomId: room.id,
+        queue: queue,
+        currentId: (usePlayerStore.getState().current ?? null)?.id ?? null,
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    } catch {}
+  }, [queue, currentFromStore, session.room?.id, session.room?.type])
+
   const extractVideoId = useCallback((url?: string) => {
     if (!url) return null;
     const match = url.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/);

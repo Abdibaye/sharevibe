@@ -15,6 +15,7 @@ export async function createRoom(_opts?: CreateRoomOptions) {
     setRoom({ id: tempId, type: 'temp' })
     // New temp room starts with empty queue for the creator
     player.clearQueue()
+    try { localStorage.removeItem('guest-room-state') } catch {}
     return { id: tempId, type: 'temp' as const }
   }
 
@@ -42,6 +43,7 @@ export async function joinRoom(id: string) {
     try {
       usePlayerStore.setState({ queue: [], current: null })
     } catch {}
+    // Allow RoomPage to restore from localStorage for this room id on mount
     return { id, type: 'temp' as const }
   }
 
