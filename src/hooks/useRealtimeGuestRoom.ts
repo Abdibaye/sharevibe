@@ -47,6 +47,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const muteBroadcastRef = useRef(false)
   const muteNowPlayingBroadcastRef = useRef(false)
+  const joinedAtRef = useRef<number>(0)
   // simple in-memory cache for fetched metadata by videoId
   const metaCacheRef = useRef<Map<string, { title: string; thumbnailUrl?: string; channelTitle?: string }>>(new Map())
 
@@ -91,6 +92,10 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
         if (!env || env.senderId === sid) return
         const ids = (env.data.videoIds || []).slice(0, getState.getState().maxQueueSize)
         const existing = getState.getState().queue
+
+        // Safety: don't let an empty remote queue wipe out a non-empty local queue.
+        // This commonly happens when a new client joins and auto-broadcasts its empty queue.
+        if (ids.length === 0 && (existing?.length ?? 0) > 0) return
 
         // Identify which IDs are not cached locally
         const uncached = ids.filter((vid) => !metaCacheRef.current.has(vid))
@@ -198,6 +203,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   channel.subscribe(() => {
       // On join, request sync from peers
       try {
+        joinedAtRef.current = Date.now()
         channel.send({
           type: 'broadcast',
           event: 'sync:request',
@@ -216,7 +222,12 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   useEffect(() => {
     const isTemp = room?.type === 'temp'
     if (!isTemp || !activeRoomId) return
-  if (muteBroadcastRef.current) return
+    if (muteBroadcastRef.current) return
+    // Grace period: avoid broadcasting empty queue right after joining so we don't wipe others
+    if ((queue?.length ?? 0) === 0) {
+      const sinceJoin = Date.now() - (joinedAtRef.current || 0)
+      if (sinceJoin < 1500) return
+    }
   const sid = senderIdRef.current
     const ids = (queue || [])
       .map((t: Track) => t.url?.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/)?.[1])

@@ -183,3 +183,44 @@
 .wave-animation {
   animation: wave 1.5s ease-in-out infinite;
 }
+
+/* Media controls: volume slider styling */
+.volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 9999px;
+  background-clip: padding-box;
+}
+.volume-slider:focus {
+  outline: none;
+}
+.volume-slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 9999px;
+  background: transparent; /* background is set on the input via inline gradient */
+}
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: var(--slider-thumb-color, var(--primary));
+  border: 2px solid var(--border);
+  margin-top: -3px; /* center thumb over 8px track: (14-8)/2 */
+}
+/* Firefox */
+.volume-slider::-moz-range-track {
+  height: 8px;
+  border-radius: 9999px;
+  background: transparent;
+}
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: var(--slider-thumb-color, var(--primary));
+  border: 2px solid var(--border);
+}

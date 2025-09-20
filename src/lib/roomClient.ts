@@ -13,6 +13,7 @@ export async function createRoom(_opts?: CreateRoomOptions) {
   if (isGuest()) {
     const tempId = uuidv4()
     setRoom({ id: tempId, type: 'temp' })
+    // New temp room starts with empty queue for the creator
     player.clearQueue()
     return { id: tempId, type: 'temp' as const }
   }
@@ -22,6 +23,7 @@ export async function createRoom(_opts?: CreateRoomOptions) {
     if (!res.ok) throw new Error('Failed to create room')
     const data = await res.json()
     setRoom({ id: data.room.id, type: 'db' })
+    // New DB room starts empty; local queue can be left alone until fetched if we auto-navigate
     player.clearQueue()
     // server-side queue is empty initially
     return { id: data.room.id, type: 'db' as const }
@@ -36,7 +38,10 @@ export async function joinRoom(id: string) {
 
   if (isGuest()) {
     setRoom({ id, type: 'temp' })
-    // leave existing queue as-is; or clear if you prefer reset
+    // Clear any stale local queue/current so we don't broadcast wrong state into the room
+    try {
+      usePlayerStore.setState({ queue: [], current: null })
+    } catch {}
     return { id, type: 'temp' as const }
   }
 

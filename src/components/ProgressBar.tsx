@@ -6,11 +6,13 @@ export default function ProgressBar({
   onSeek,
   className = "",
   totalSeconds,
+  isPlaying,
 }: {
   progress: number; // 0..1
   onSeek: (pct: number) => void;
   className?: string;
   totalSeconds?: number; // optional, used for hover time tooltip
+  isPlaying?: boolean; // controls styling (active vs paused)
 }) {
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
   const [hoverPct, setHoverPct] = React.useState<number | null>(null)
@@ -65,7 +67,7 @@ export default function ProgressBar({
         aria-valuemax={100}
         aria-valuenow={pct}
         tabIndex={0}
-        className="group h-3 cursor-pointer rounded-full border border-border/50 bg-muted/40 backdrop-blur-sm relative transition-colors hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+  className="group h-3 cursor-pointer rounded-full border border-border/50 bg-muted/40 backdrop-blur-sm relative transition-colors hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onKeyDown={handleKey}
         onMouseEnter={() => setIsHovering(true)}
         onMouseLeave={() => { setIsHovering(false); setHoverPct(null) }}
@@ -79,23 +81,26 @@ export default function ProgressBar({
       >
         {/* Progress fill */}
         <div
-          className="absolute inset-y-0 left-0 rounded-full overflow-hidden transition-[width] duration-300 ease-out bg-gradient-to-r from-primary to-primary/60"
+          className={`absolute inset-y-0 left-0 rounded-full overflow-hidden transition-[width] duration-300 ease-out bg-gradient-to-r ${isPlaying ? 'from-primary to-primary/60' : 'from-muted to-muted/50'}`}
           style={{ width: `${pct}%` }}
         >
-          {/* Subtle stripe shimmer on hover */}
-          <div className="h-full w-full opacity-0 group-hover:opacity-100 transition-opacity"
-               style={{
-                 backgroundImage:
-                   "linear-gradient(45deg, rgba(255,255,255,0.18) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 75%, transparent 75%, transparent)",
-                 backgroundSize: "16px 16px",
-                 animation: "progress-move 1s linear infinite",
-               }}
-          />
+          {/* Subtle stripe shimmer only when playing */}
+          {isPlaying ? (
+            <div
+              className="h-full w-full opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{
+                backgroundImage:
+                  "linear-gradient(45deg, rgba(255,255,255,0.18) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.18) 75%, transparent 75%, transparent)",
+                backgroundSize: "16px 16px",
+                animation: "progress-move 1s linear infinite",
+              }}
+            />
+          ) : null}
         </div>
 
         {/* Thumb */}
         <div
-          className="absolute top-1/2 h-4 w-4 md:h-5 md:w-5 -translate-y-1/2 translate-x-[-50%] rounded-full bg-background ring-2 ring-primary shadow-md opacity-0 group-hover:opacity-100 transition-transform duration-200 group-active:scale-105"
+          className={`absolute top-1/2 h-4 w-4 md:h-5 md:w-5 -translate-y-1/2 translate-x-[-50%] rounded-full bg-background ring-2 shadow-md opacity-0 group-hover:opacity-100 transition-transform duration-200 group-active:scale-105 ${isPlaying ? 'ring-primary' : 'ring-muted-foreground'}`}
           style={{ left: `${pct}%` }}
         />
 
