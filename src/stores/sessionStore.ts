@@ -52,7 +52,7 @@ export const useSessionStore = create<SessionState>()(
       reset: () => {
         set({ mode: 'guest', room: null, user: null })
         usePlayerStore.getState().setMaxQueueSize(5)
-        usePlayerStore.getState().clearQueue()
+        // Do not forcibly clear the queue on reset; let room actions manage queue lifecycle
       },
     }),
     {

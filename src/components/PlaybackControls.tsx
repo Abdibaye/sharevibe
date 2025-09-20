@@ -26,6 +26,7 @@ export default function PlaybackControls({
     <div className="flex items-center gap-4 mt-6">
       <Button
         size="icon"
+        variant={isPlaying ? "default" : "secondary"}
         onClick={onToggle}
         disabled={!canToggle || !!isLoading}
         title={!canToggle
@@ -49,29 +50,23 @@ export default function PlaybackControls({
       </Button>
 
       <div className="flex items-center gap-2 ml-2">
-        {onToggleMute && (
+        {onToggleMute ? (
           <Button
-            size="sm"
-            variant="secondary"
+            size="icon"
+            variant="ghost"
             onClick={onToggleMute}
             title={isMuted ? "Unmute" : "Mute"}
             aria-label={isMuted ? "Unmute" : "Mute"}
-            className="inline-flex items-center gap-1"
           >
-            {isMuted ? (
-              <>
-                <VolumeX className="h-4 w-4" />
-                <span className="hidden sm:inline">Unmute</span>
-              </>
+            {isMuted || volume === 0 ? (
+              <VolumeX className="h-4 w-4" />
             ) : (
-              <>
-                <Volume2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Mute</span>
-              </>
+              <Volume2 className="h-4 w-4" />
             )}
           </Button>
+        ) : (
+          <Volume2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         )}
-        <Volume2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         <input
           type="range"
           min={0}
@@ -79,7 +74,19 @@ export default function PlaybackControls({
           step={0.01}
           value={volume}
           onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-          className="h-2 accent-primary cursor-pointer"
+          className="volume-slider h-2 accent-primary cursor-pointer rounded-full"
+          style={{
+            // Show filled portion with primary color and the rest as muted color; when muted treat as 0%
+            background: (() => {
+              const pct = Math.max(0, Math.min(100, Math.round(((isMuted ? 0 : volume) || 0) * 100)))
+              const filled = 'var(--primary)'
+              const empty = 'var(--muted)'
+              return `linear-gradient(to right, ${filled} 0%, ${filled} ${pct}%, ${empty} ${pct}%, ${empty} 100%)`
+            })(),
+            // Thumb color changes when muted
+            // Use CSS variable to style vendor-specific thumbs
+            ['--slider-thumb-color' as any]: isMuted || volume === 0 ? 'var(--muted-foreground)' : 'var(--primary)'
+          }}
           aria-label="Volume"
           title={`Volume ${Math.round(volume * 100)}%`}
         />

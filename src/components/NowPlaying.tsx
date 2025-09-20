@@ -127,7 +127,7 @@ export default function NowPlaying({
       </CardHeader>
 
       <CardContent className="pt-0">
-        <ProgressBar progress={progress} onSeek={onSeek} totalSeconds={totalSeconds} />
+  <ProgressBar progress={progress} onSeek={onSeek} totalSeconds={totalSeconds} isPlaying={isPlaying} />
         <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground font-mono">
           <span>{timeDisplay.current}</span>
           <span>{timeDisplay.total}</span>
