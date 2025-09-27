@@ -669,7 +669,7 @@ export default function RoomPage() {
       {/* Removed top navbar. It's now rendered from the layout via <NavBar /> */}
 
       {/* Now Playing Section */}
-      <section className="flex flex-col md:flex-row items-center md:items-start gap-6 px-6 py-4 z-10 relative">
+      <section className="flex flex-col lg:flex-row items-stretch lg:items-start gap-6 px-4 sm:px-6 py-4 z-10 relative max-w-screen-2xl mx-auto w-full">
         <NowPlaying
           currentSong={currentSong ? { ...currentSong, addedBy: currentSong.artist ?? (currentSong as any).addedBy } : null}
           isPlaying={isPlaying}
@@ -687,7 +687,7 @@ export default function RoomPage() {
           audioRef={audioRef}
           ytPlayerDivRef={ytPlayerDivRef}
         />
-    <div className="flex-1 w-full md:max-w-md rounded-xl p-4 md:p-6 shadow-lg overflow-y-auto max-h-[50vh] md:max-h-96 bg-card border border-border">
+  <div className="w-full lg:max-w-md rounded-xl p-4 sm:p-5 lg:p-6 shadow-lg overflow-y-auto max-h-[55vh] sm:max-h-[60vh] lg:max-h-96 bg-card border border-border order-first lg:order-none">
           {/* Queue Section */}
           <div className="flex items-center justify-between mb-4">
       <h3 className="text-lg md:text-xl font-bold">Queue</h3>
@@ -776,19 +776,19 @@ export default function RoomPage() {
       </section>
 
       {/* Add Song Section */}
-      <footer className="mt-4 px-6 py-4 bg-gradient-to-t from-background/80 to-transparent flex flex-col justify-center gap-4 z-10 relative">
-        <form onSubmit={handleSubmit} className="flex gap-4 w-full max-w-xl">
+      <footer className="mt-4 px-4 sm:px-6 py-4 bg-gradient-to-t from-background/80 to-transparent flex flex-col justify-center gap-4 z-10 relative">
+        <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-2xl">
           <input
             type="text"
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
             placeholder="Search YouTube or paste a link..."
-            className="flex-1 px-4 py-3 rounded-lg bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500"
+            className="flex-1 px-4 py-3 rounded-lg bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500 min-w-0"
           />
           <button
             type="submit"
             disabled={adding}
-            className="rounded-lg px-6 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 font-bold text-lg transition"
+            className="rounded-lg px-6 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 font-bold text-lg transition whitespace-nowrap"
           >
             {adding ? "Adding..." : "Add"}
           </button>
@@ -796,7 +796,7 @@ export default function RoomPage() {
 
         {/* Live search suggestions */}
         {!isYouTubeUrl(inputUrl) && (searching || results.length > 0) && (
-          <div className="w-full max-w-xl bg-gray-800/70 rounded-lg border border-gray-700 overflow-hidden">
+          <div className="w-full max-w-2xl bg-gray-800/70 rounded-lg border border-gray-700 overflow-hidden">
             {searching && (
               <div className="px-4 py-2 text-sm text-gray-400">Searching...</div>
             )}
@@ -827,7 +827,7 @@ export default function RoomPage() {
 
         {/* Keep preview of last added */}
         {preview && (
-          <div className="w-full max-w-xl flex items-center gap-4 bg-gray-800/70 p-4 rounded-lg border border-gray-700">
+          <div className="w-full max-w-2xl flex items-center gap-4 bg-gray-800/70 p-4 rounded-lg border border-gray-700">
             <img src={preview.thumbnailUrl} alt={preview.title} className="w-16 h-16 rounded object-cover" />
             <div className="flex-1">
               <p className="font-semibold leading-tight">{preview.title}</p>
