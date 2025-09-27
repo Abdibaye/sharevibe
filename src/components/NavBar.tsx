@@ -201,17 +201,22 @@ export default function NavBar({
           </Dialog>
 
           {/* Room ID copy/share */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleCopy}
-            className="font-mono hidden lg:inline-flex"
-            aria-label="Copy room ID"
-            title="Copy room ID"
-          >
-            {copied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-            {effectiveRoomId}
-          </Button>
+          {(() => {
+            const displayRoomId = effectiveRoomId.length > 20 ? `${effectiveRoomId.slice(0, 8)}…${effectiveRoomId.slice(-4)}` : effectiveRoomId
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCopy}
+                className="font-mono hidden md:inline-flex max-w-[210px] truncate"
+                aria-label="Copy room ID"
+                title={`Copy room ID: ${effectiveRoomId}`}
+              >
+                {copied ? <Check className="mr-2 h-4 w-4 shrink-0" /> : <Copy className="mr-2 h-4 w-4 shrink-0" />}
+                <span className="truncate">{displayRoomId}</span>
+              </Button>
+            )
+          })()}
           <Button
             size="sm"
             variant="ghost"
