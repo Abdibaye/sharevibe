@@ -199,12 +199,11 @@ export async function touchPresence(roomId: string, clientId: string, buffering:
 
 export function lockstepState(members: PresenceRow[], now = Date.now()) {
   const inRoom = members.filter((m) => now - m.lastSeen <= LEFT_MS)
-  const healthy = inRoom.filter((m) => now - m.lastSeen <= STALE_MS && !m.buffering)
-  const buffering = inRoom.some((m) => m.buffering)
+  const healthy = inRoom.filter((m) => now - m.lastSeen <= STALE_MS)
   const offline = inRoom.some((m) => now - m.lastSeen > STALE_MS)
-  const shouldHold = inRoom.length >= 2 && (buffering || offline)
-  const reason = !shouldHold ? null : buffering ? "buffering" : "peer-offline"
-  return { peers: inRoom.length, healthy: healthy.length, shouldHold, reason: reason as "buffering" | "peer-offline" | null }
+  // Do not stall on YouTube startup buffering — that prevented joiners from ever starting.
+  const shouldHold = inRoom.length >= 2 && offline
+  return { peers: inRoom.length, healthy: healthy.length, shouldHold, reason: shouldHold ? "peer-offline" as const : null }
 }
 
 export async function applyLockstep(roomId: string, members: PresenceRow[]) {

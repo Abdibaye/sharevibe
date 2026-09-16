@@ -6,7 +6,7 @@ import { enqueue, removeFromQueue, shuffleQueue } from "@/lib/queueClient";
 import { createRoom, joinRoom } from "@/lib/roomClient";
 import { extractYouTubeId } from "@/lib/utils";
 import { errorMessage } from "@/lib/auth-user";
-import { getYT, type YTPlayer } from "@/lib/youtubePlayer";
+import { ensureYouTubeApi, getYT, type YTPlayer } from "@/lib/youtubePlayer";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useRoomSync } from "@/hooks/useRoomSync";
@@ -36,7 +36,10 @@ export default function RoomPage() {
   const ytPlayerRef = useRef<YTPlayer | null>(null); // YouTube Player instance
   const ytPlayerDivRef = useRef<HTMLDivElement | null>(null);
   const ytProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bufferingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const playerLoadGenRef = useRef(0)
+  const canSyncRef = useRef(false)
+  const unmuteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoadingPlayback, setIsLoadingPlayback] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -58,6 +61,21 @@ export default function RoomPage() {
   useEffect(() => { currentSongRef.current = currentSong }, [currentSong])
 
   const STORAGE_KEY = 'guest-room-state'
+
+  const fmtTime = (s: number) => {
+    if (!isFinite(s) || s < 0) return '0:00'
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60).toString().padStart(2, '0')
+    return `${m}:${sec}`
+  }
+
+  const showLiveClock = (seconds: number, duration?: number) => {
+    setTimeDisplay({
+      current: fmtTime(seconds),
+      total: duration && duration > 0 ? fmtTime(duration) : timeDisplay.total,
+    })
+    if (duration && duration > 0) setProgress(Math.min(1, seconds / duration))
+  }
 
   const syncPlaying = (playing: boolean) => {
     setIsPlaying(playing)
@@ -264,17 +282,9 @@ export default function RoomPage() {
     }
   };
 
-  // Load YouTube IFrame API once
+  // Load YouTube IFrame API as soon as the room mounts
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const yt = getYT();
-    if (yt?.Player) return;
-    const existing = document.getElementById('youtube-iframe-api');
-    if (existing) return;
-    const tag = document.createElement('script');
-    tag.id = 'youtube-iframe-api';
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.body.appendChild(tag);
+    ensureYouTubeApi()
   }, []);
 
   // Determine next track in queue
@@ -300,7 +310,6 @@ export default function RoomPage() {
 
   // Helper to ensure player created
   const loadOrCreatePlayer = (videoId: string, opts?: { userInitiated?: boolean; startAt?: number; shouldPlay?: boolean }) => {
-    setBuffering(true)
     const gen = playerLoadGenRef.current
     if (!ytPlayerDivRef.current) {
       setTimeout(() => {
@@ -311,17 +320,16 @@ export default function RoomPage() {
     }
     const YTGlobal = getYT();
     if (!YTGlobal || !YTGlobal.Player) {
+      ensureYouTubeApi()
       setTimeout(() => {
         if (playerLoadGenRef.current !== gen) return
         loadOrCreatePlayer(videoId, opts)
-      }, 300);
+      }, 80);
       return;
     }
-    const applyStartAt = () => {
-      if (opts?.startAt && opts.startAt > 0) {
-        try { ytPlayerRef.current?.seekTo?.(opts.startAt, true) } catch {}
-      }
-    }
+    const start = Math.max(0, opts?.startAt ?? 0)
+    const shouldPlay = opts?.shouldPlay !== false
+    canSyncRef.current = false
     const applyPlaybackIntent = () => {
       if (opts?.userInitiated) {
         try { ytPlayerRef.current?.unMute?.(); setIsMuted(false); } catch {}
@@ -329,7 +337,7 @@ export default function RoomPage() {
         return
       }
       try { ytPlayerRef.current?.mute?.(); setIsMuted(true); } catch {}
-      if (opts?.shouldPlay === false) {
+      if (!shouldPlay) {
         try { ytPlayerRef.current?.pauseVideo?.() } catch {}
         syncPlaying(false)
       } else {
@@ -338,7 +346,7 @@ export default function RoomPage() {
     }
     if (ytPlayerRef.current) {
       try {
-        ytPlayerRef.current.loadVideoById(videoId);
+        ytPlayerRef.current.loadVideoById({ videoId, startSeconds: start });
       } catch {
         try { ytPlayerRef.current.destroy?.() } catch {}
         ytPlayerRef.current = null
@@ -349,13 +357,6 @@ export default function RoomPage() {
         return
       }
       applyPlaybackIntent()
-      setTimeout(() => {
-        if (playerLoadGenRef.current !== gen) return
-        applyStartAt()
-        if (opts?.shouldPlay === false) {
-          try { ytPlayerRef.current?.pauseVideo?.() } catch {}
-        }
-      }, 400)
       return;
     }
     const host = ytPlayerDivRef.current
@@ -368,8 +369,11 @@ export default function RoomPage() {
     }
     ytPlayerRef.current = new YTGlobal.Player(host, {
       videoId,
+      width: 320,
+      height: 180,
       playerVars: {
-        autoplay: opts?.shouldPlay === false ? 0 : 1,
+        autoplay: shouldPlay ? 1 : 0,
+        start: Math.floor(start),
         rel: 0,
         modestbranding: 1,
         playsinline: 1,
@@ -379,21 +383,35 @@ export default function RoomPage() {
       events: {
         onReady: () => {
           if (playerLoadGenRef.current !== gen) return
-          applyStartAt()
+          try { ytPlayerRef.current?.setPlaybackQuality?.("small") } catch {}
           applyPlaybackIntent()
         },
         onStateChange: (e: { data: number }) => {
           if (e.data === YTGlobal.PlayerState.PLAYING) {
+            if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current)
             setBuffering(false)
+            canSyncRef.current = true
             if (!applyingRemoteRef.current) syncPlaying(true);
             setIsLoadingPlayback(false);
             startYtProgressTimer();
+            if (!opts?.userInitiated && unmuteTimerRef.current == null) {
+              unmuteTimerRef.current = setTimeout(() => {
+                unmuteTimerRef.current = null
+                try {
+                  ytPlayerRef.current?.unMute?.()
+                  setIsMuted(false)
+                } catch {}
+              }, 250)
+            }
           } else if (e.data === YTGlobal.PlayerState.PAUSED) {
+            if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current)
             setBuffering(false)
             if (!applyingRemoteRef.current) syncPlaying(false);
             setIsLoadingPlayback(false);
           } else if (e.data === YTGlobal.PlayerState.ENDED) {
+            if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current)
             setBuffering(false)
+            canSyncRef.current = false
             syncPlaying(false);
             setIsLoadingPlayback(false);
             setProgress(0);
@@ -402,8 +420,9 @@ export default function RoomPage() {
             setTimeDisplay({ current: '0:00', total: '0:00' });
             if (autoAdvanceRef.current) playNext();
           } else if (e.data === YTGlobal.PlayerState.BUFFERING) {
-            setBuffering(true)
             setIsLoadingPlayback(true);
+            if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current)
+            bufferingTimerRef.current = setTimeout(() => setBuffering(true), 2000)
           }
         }
       }
@@ -420,13 +439,7 @@ export default function RoomPage() {
         setProgress(cur / dur);
         setTotalSeconds(dur);
         usePlayerStore.getState().setProgress(cur)
-        const fmt = (s: number) => {
-          if (!isFinite(s)) return '0:00';
-          const m = Math.floor(s / 60);
-          const sec = Math.floor(s % 60).toString().padStart(2, '0');
-          return `${m}:${sec}`;
-        };
-        setTimeDisplay({ current: fmt(cur), total: fmt(dur) });
+        setTimeDisplay({ current: fmtTime(cur), total: fmtTime(dur) });
       }
     }, 500);
   };
@@ -441,6 +454,8 @@ export default function RoomPage() {
     return () => {
       playerLoadGenRef.current += 1
       stopYtProgressTimer();
+      if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current)
+      if (unmuteTimerRef.current) clearTimeout(unmuteTimerRef.current)
       if (ytPlayerRef.current) {
         try { ytPlayerRef.current.destroy?.(); } catch {}
         ytPlayerRef.current = null
@@ -527,14 +542,9 @@ export default function RoomPage() {
       (!!extractVideoId(currentSong.url) && extractVideoId(currentSong.url) === extractVideoId(song.url))
     )
     if (sameTrack) {
-      const startAt = song.startAt
-      if (typeof startAt === 'number' && startAt > 0) {
-        if (ytPlayerRef.current?.seekTo) {
-          try { ytPlayerRef.current.seekTo(startAt, true) } catch {}
-        } else if (song.url && isYouTubeUrl(song.url)) {
-          const vid = extractVideoId(song.url)
-          if (vid) loadOrCreatePlayer(vid, { userInitiated: false, startAt, shouldPlay: usePlayerStore.getState().isPlaying })
-        }
+      if (!ytPlayerRef.current && song.url && isYouTubeUrl(song.url)) {
+        const vid = extractVideoId(song.url)
+        if (vid) loadOrCreatePlayer(vid, { userInitiated: false, startAt: song.startAt, shouldPlay: usePlayerStore.getState().isPlaying !== false })
       }
       return
     }
@@ -559,11 +569,17 @@ export default function RoomPage() {
         audioRef.current.pause();
         audioRef.current.removeAttribute('src');
       }
-      setIsPlaying(false);
-      setProgress(0);
-      setTotalSeconds(undefined);
+      const shouldPlay = usePlayerStore.getState().isPlaying !== false
+      const startAt = Math.max(0, song.startAt ?? 0)
+      setIsPlaying(shouldPlay)
+      setTotalSeconds(undefined)
+      if (startAt > 0) showLiveClock(startAt)
+      else setProgress(0)
       const vid = extractVideoId(url);
-      if (vid) { setIsLoadingPlayback(true); loadOrCreatePlayer(vid, { userInitiated: false, startAt: song.startAt, shouldPlay: usePlayerStore.getState().isPlaying }); }
+      if (vid) {
+        setIsLoadingPlayback(true)
+        loadOrCreatePlayer(vid, { userInitiated: false, startAt, shouldPlay })
+      }
       return;
     }
     if (audioRef.current) {
@@ -727,14 +743,27 @@ export default function RoomPage() {
     const id = setInterval(() => {
       const clock = usePlayerStore.getState().syncClock
       const player = ytPlayerRef.current
-      if (!clock || !player) return
+      if (!clock) return
       const live = clock.position + (clock.playing ? (Date.now() - clock.capturedAt) / 1000 : 0)
-      const cur = player.getCurrentTime?.() ?? 0
+      const dur = player?.getDuration?.() || 0
+      if (!canSyncRef.current) {
+        showLiveClock(live, dur > 0 ? dur : undefined)
+      }
+      if (!player) return
       const YTGlobal = getYT()
       const state = player.getPlayerState?.()
+      const unstarted = !YTGlobal || state === YTGlobal.PlayerState.UNSTARTED || state === YTGlobal.PlayerState.CUED || state === YTGlobal.PlayerState.BUFFERING
       applyingRemoteRef.current = true
-      if (Math.abs(cur - live) > 0.35) {
-        try { player.seekTo(live, true) } catch {}
+      if (clock.playing && unstarted) {
+        try { player.mute?.(); player.playVideo() } catch {}
+        window.setTimeout(() => { applyingRemoteRef.current = false }, 80)
+        return
+      }
+      if (canSyncRef.current) {
+        const cur = player.getCurrentTime?.() ?? 0
+        if (Math.abs(cur - live) > 1.25) {
+          try { player.seekTo(live, true) } catch {}
+        }
       }
       if (clock.playing && YTGlobal && state !== YTGlobal.PlayerState.PLAYING && state !== YTGlobal.PlayerState.BUFFERING) {
         try { player.playVideo() } catch {}
@@ -745,7 +774,7 @@ export default function RoomPage() {
       }
       if (clock.playing) syncPlaying(true)
       window.setTimeout(() => { applyingRemoteRef.current = false }, 80)
-    }, 200)
+    }, 250)
     return () => clearInterval(id)
   }, [])
 
