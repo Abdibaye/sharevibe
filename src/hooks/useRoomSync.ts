@@ -172,7 +172,7 @@ export function useRoomSync(roomId?: string | null, buffering = false) {
     }
 
     void tick()
-    const timer = setInterval(() => { void tick() }, 450)
+    const timer = setInterval(() => { void tick() }, 300)
     return () => {
       cancelled = true
       clearInterval(timer)
