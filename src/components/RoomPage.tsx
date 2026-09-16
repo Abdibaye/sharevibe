@@ -19,7 +19,9 @@ export default function RoomPage() {
   const setCurrentGlobal = usePlayerStore((s) => s.setCurrent)
   const session = useSessionStore()
   const roomId = session.room?.id
-  const { publishNowPlaying, publishControl } = useRoomSync(roomId)
+  const [buffering, setBuffering] = useState(false)
+  const applyingRemoteRef = useRef(false)
+  const { publishNowPlaying, publishControl, stall } = useRoomSync(roomId, buffering)
   const router = useRouter()
   const [currentSong, setCurrentSong] = useState<Track | null>(null);
   const [inputUrl, setInputUrl] = useState('');
@@ -298,6 +300,7 @@ export default function RoomPage() {
 
   // Helper to ensure player created
   const loadOrCreatePlayer = (videoId: string, opts?: { userInitiated?: boolean; startAt?: number; shouldPlay?: boolean }) => {
+    setBuffering(true)
     const gen = playerLoadGenRef.current
     if (!ytPlayerDivRef.current) {
       setTimeout(() => {
@@ -381,13 +384,16 @@ export default function RoomPage() {
         },
         onStateChange: (e: { data: number }) => {
           if (e.data === YTGlobal.PlayerState.PLAYING) {
-            syncPlaying(true);
+            setBuffering(false)
+            if (!applyingRemoteRef.current) syncPlaying(true);
             setIsLoadingPlayback(false);
             startYtProgressTimer();
           } else if (e.data === YTGlobal.PlayerState.PAUSED) {
-            syncPlaying(false);
+            setBuffering(false)
+            if (!applyingRemoteRef.current) syncPlaying(false);
             setIsLoadingPlayback(false);
           } else if (e.data === YTGlobal.PlayerState.ENDED) {
+            setBuffering(false)
             syncPlaying(false);
             setIsLoadingPlayback(false);
             setProgress(0);
@@ -396,6 +402,7 @@ export default function RoomPage() {
             setTimeDisplay({ current: '0:00', total: '0:00' });
             if (autoAdvanceRef.current) playNext();
           } else if (e.data === YTGlobal.PlayerState.BUFFERING) {
+            setBuffering(true)
             setIsLoadingPlayback(true);
           }
         }
@@ -716,12 +723,45 @@ export default function RoomPage() {
     }
   }, [controlNonce])
 
+  useEffect(() => {
+    const id = setInterval(() => {
+      const clock = usePlayerStore.getState().syncClock
+      const player = ytPlayerRef.current
+      if (!clock || !player) return
+      const live = clock.position + (clock.playing ? (Date.now() - clock.capturedAt) / 1000 : 0)
+      const cur = player.getCurrentTime?.() ?? 0
+      const YTGlobal = getYT()
+      const state = player.getPlayerState?.()
+      applyingRemoteRef.current = true
+      if (Math.abs(cur - live) > 0.35) {
+        try { player.seekTo(live, true) } catch {}
+      }
+      if (clock.playing && YTGlobal && state !== YTGlobal.PlayerState.PLAYING && state !== YTGlobal.PlayerState.BUFFERING) {
+        try { player.playVideo() } catch {}
+      }
+      if (!clock.playing && YTGlobal && state === YTGlobal.PlayerState.PLAYING) {
+        try { player.pauseVideo() } catch {}
+        syncPlaying(false)
+      }
+      if (clock.playing) syncPlaying(true)
+      window.setTimeout(() => { applyingRemoteRef.current = false }, 80)
+    }, 200)
+    return () => clearInterval(id)
+  }, [])
+
   return (
     <div
       className="min-h-screen flex flex-col relative text-white font-sans"
     >
       {!roomId && (
         <div className="px-4 sm:px-6 pt-3 text-sm text-muted-foreground">Connecting to room…</div>
+      )}
+      {stall.active && (
+        <div className="px-4 sm:px-6 pt-3 text-sm text-amber-300">
+          {stall.reason === "buffering"
+            ? "Waiting for everyone to catch up…"
+            : "Waiting for a listener to reconnect…"}
+        </div>
       )}
       {/* Removed top navbar. It's now rendered from the layout via <NavBar /> */}
 

@@ -1,21 +1,25 @@
 "use client"
 
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { usePlayerStore, type Track } from "@/stores/playerStore"
 import { songToTrack } from "@/lib/queueClient"
-import { extractYouTubeId } from "@/lib/utils"
-import { liveTimestamp, youtubeThumb } from "@/lib/roomState"
+import { extractYouTubeId, uuidv4 } from "@/lib/utils"
+import { youtubeThumb } from "@/lib/roomState"
 
-type RoomSnapshot = {
-  id: string
+type TickResponse = {
+  serverNow: number
+  livePosition: number
+  isPlaying: boolean
+  playbackSeq: number
+  pausedBy?: "user" | "stall" | null
+  playingUrl: string | null
+  playingTitle: string | null
+  playingThumb: string | null
+  stall: boolean
+  stallReason: "buffering" | "peer-offline" | null
+  peers: number
+  songsHash: string
   songs?: Parameters<typeof songToTrack>[0][]
-  playingUrl?: string | null
-  playingTitle?: string | null
-  playingThumb?: string | null
-  playingAt?: number
-  isPlaying?: boolean
-  playbackClock?: string | null
-  playbackSeq?: number
 }
 
 type ControlEvent = {
@@ -33,119 +37,148 @@ function fingerprint(tracks: Track[]) {
   return tracks.map((t) => t.id).join("|")
 }
 
-function trackFromPlayback(room: RoomSnapshot, timestamp: number): Track | null {
-  const url = room.playingUrl
-  if (!url) return null
-  const videoId = extractYouTubeId(url)
-  const fromQueue = usePlayerStore.getState().queue.find((t) => t.url === url || extractYouTubeId(t.url) === videoId)
-  return {
-    id: videoId || fromQueue?.id || url,
-    dbId: fromQueue?.dbId,
-    title: room.playingTitle || fromQueue?.title || "Now playing",
-    url,
-    thumbnailUrl: room.playingThumb || fromQueue?.thumbnailUrl || youtubeThumb(url),
-    artist: fromQueue?.artist,
-    startAt: timestamp,
+function clientId() {
+  try {
+    const key = "sharevibe-client-id"
+    const existing = sessionStorage.getItem(key)
+    if (existing) return existing
+    const id = uuidv4()
+    sessionStorage.setItem(key, id)
+    return id
+  } catch {
+    return uuidv4()
   }
 }
 
-export function useRoomSync(roomId?: string | null) {
+export function useRoomSync(roomId?: string | null, buffering = false) {
   const setQueue = usePlayerStore((s) => s.setQueue)
   const setCurrent = usePlayerStore((s) => s.setCurrent)
-  const setControl = usePlayerStore((s) => s.setControl)
-  const lastAppliedSeq = useRef(0)
+  const setSyncClock = usePlayerStore((s) => s.setSyncClock)
+  const [stall, setStall] = useState<{ active: boolean; reason: string | null; peers: number }>({
+    active: false,
+    reason: null,
+    peers: 1,
+  })
   const lastPostedSeq = useRef(0)
-  const seededRef = useRef(false)
   const postingRef = useRef(false)
+  const songsHashRef = useRef("")
+  const cidRef = useRef<string>("")
+  const bufferingRef = useRef(buffering)
+  bufferingRef.current = buffering
 
   useEffect(() => {
     if (!roomId) return
-    seededRef.current = false
-    lastAppliedSeq.current = 0
+    cidRef.current = clientId()
     lastPostedSeq.current = 0
+    songsHashRef.current = ""
     let cancelled = false
 
-    const applyRoom = async (room: RoomSnapshot) => {
-      const tracks = (room.songs ?? []).map(songToTrack)
-      const local = usePlayerStore.getState()
-      if (fingerprint(tracks) !== fingerprint(local.queue)) {
-        if (tracks.length > 0 || local.queue.length === 0) {
+    const applyTick = (tick: TickResponse) => {
+      if (Array.isArray(tick.songs)) {
+        const tracks = tick.songs.map(songToTrack)
+        const local = usePlayerStore.getState()
+        if (fingerprint(tracks) !== fingerprint(local.queue) && (tracks.length > 0 || local.queue.length === 0)) {
           setQueue(tracks)
         }
+        songsHashRef.current = tick.songsHash
       }
 
-      const seq = room.playbackSeq ?? 0
-      if (seq > lastAppliedSeq.current && seq !== lastPostedSeq.current) {
-        lastAppliedSeq.current = seq
-        const ts = liveTimestamp(room.playingAt ?? 0, !!room.isPlaying, room.playbackClock)
-        const track = trackFromPlayback(room, ts)
-        if (track) {
-          const currentVid = extractYouTubeId(local.current?.url) || local.current?.id
-          const nextVid = extractYouTubeId(track.url) || track.id
-          if (currentVid !== nextVid) {
-            setCurrent(track)
-            if (room.isPlaying) usePlayerStore.getState().play()
-            else usePlayerStore.getState().pause()
-          } else {
-            setControl({
-              action: room.isPlaying ? "play" : "pause",
-              timestamp: ts,
-            })
-          }
+      const url = tick.playingUrl
+      if (url) {
+        const videoId = extractYouTubeId(url)
+        const local = usePlayerStore.getState()
+        const fromQueue = local.queue.find((t) => t.url === url || extractYouTubeId(t.url) === videoId)
+        const track: Track = {
+          id: videoId || fromQueue?.id || url,
+          dbId: fromQueue?.dbId,
+          title: tick.playingTitle || fromQueue?.title || "Now playing",
+          url,
+          thumbnailUrl: tick.playingThumb || fromQueue?.thumbnailUrl || youtubeThumb(url),
+          artist: fromQueue?.artist,
+          startAt: tick.livePosition,
         }
+        const currentVid = extractYouTubeId(local.current?.url) || local.current?.id
+        const nextVid = videoId || track.id
+        if (currentVid !== nextVid) {
+          setCurrent(track)
+          if (tick.isPlaying) usePlayerStore.getState().play()
+          else usePlayerStore.getState().pause()
+        }
+        setSyncClock({
+          url,
+          position: tick.livePosition,
+          playing: tick.isPlaying,
+          capturedAt: Date.now(),
+          stall: tick.stall,
+          stallReason: tick.stallReason,
+          peers: tick.peers,
+        })
       }
 
-      if ((room.songs?.length ?? 0) === 0 && local.queue.length > 0 && !postingRef.current) {
-        postingRef.current = true
-        try {
-          for (const track of local.queue) {
-            await fetch(`/api/rooms/${roomId}/songs`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                title: track.title,
-                url: track.url,
-                addedBy: track.artist,
-                thumbnailUrl: track.thumbnailUrl,
-              }),
-            }).catch(() => {})
-          }
-          if (local.current?.url) {
-            const seq = await postPlayback(roomId, {
-              playingUrl: local.current.url,
-              playingTitle: local.current.title,
-              playingThumb: local.current.thumbnailUrl ?? null,
-              playingAt: local.progress || 0,
-              isPlaying: local.isPlaying,
-            })
-            if (typeof seq === "number") lastPostedSeq.current = seq
-          }
-        } finally {
-          postingRef.current = false
-          seededRef.current = true
+      setStall({ active: tick.stall, reason: tick.stallReason, peers: tick.peers })
+
+      if (Array.isArray(tick.songs) && tick.songs.length === 0) {
+        const local = usePlayerStore.getState()
+        if (local.queue.length > 0 && !postingRef.current) {
+          postingRef.current = true
+          void (async () => {
+            try {
+              for (const track of local.queue) {
+                await fetch(`/api/rooms/${roomId}/songs`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    title: track.title,
+                    url: track.url,
+                    addedBy: track.artist,
+                    thumbnailUrl: track.thumbnailUrl,
+                  }),
+                }).catch(() => {})
+              }
+              if (local.current?.url) {
+                const seq = await postPlayback(roomId, {
+                  playingUrl: local.current.url,
+                  playingTitle: local.current.title,
+                  playingThumb: local.current.thumbnailUrl ?? null,
+                  playingAt: local.progress || 0,
+                  isPlaying: local.isPlaying,
+                })
+                if (typeof seq === "number") lastPostedSeq.current = seq
+              }
+            } finally {
+              postingRef.current = false
+            }
+          })()
         }
-      } else if ((room.songs?.length ?? 0) > 0) {
-        seededRef.current = true
       }
     }
 
-    const pull = async () => {
+    const tick = async () => {
       try {
-        const res = await fetch(`/api/rooms/${roomId}`, { cache: "no-store" })
+        const res = await fetch(`/api/rooms/${roomId}/tick`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientId: cidRef.current,
+            buffering: bufferingRef.current,
+            songsHash: songsHashRef.current,
+          }),
+        })
         if (!res.ok || cancelled) return
-        const data = await res.json() as { room?: RoomSnapshot }
-        if (!data.room || cancelled) return
-        await applyRoom(data.room)
+        const data = await res.json() as TickResponse
+        if (cancelled) return
+        applyTick(data)
       } catch {}
     }
 
-    void pull()
-    const timer = setInterval(() => { void pull() }, 1200)
+    void tick()
+    const timer = setInterval(() => { void tick() }, 450)
     return () => {
       cancelled = true
       clearInterval(timer)
+      setSyncClock(null)
     }
-  }, [roomId, setQueue, setCurrent, setControl])
+  }, [roomId, setQueue, setCurrent, setSyncClock])
 
   const publishNowPlaying = useMemo(() => (params: NowPlayingPayload) => {
     if (!roomId || postingRef.current) return
@@ -180,7 +213,7 @@ export function useRoomSync(roomId?: string | null) {
     })
   }, [roomId])
 
-  return { publishNowPlaying, publishControl }
+  return { publishNowPlaying, publishControl, stall }
 }
 
 async function postPlayback(roomId: string, body: {

@@ -37,6 +37,16 @@ export type PlayerState = {
   setProgress: (s: number) => void
   setMaxQueueSize: (n: number) => void
   setControl: (c: { action: 'play' | 'pause' | 'seek'; timestamp?: number } | null) => void
+  syncClock: {
+    url: string
+    position: number
+    playing: boolean
+    capturedAt: number
+    stall: boolean
+    stallReason: string | null
+    peers: number
+  } | null
+  setSyncClock: (c: PlayerState["syncClock"]) => void
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -48,6 +58,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   maxQueueSize: 5, // default for guests; session store will bump to 20 for users
   control: null,
   controlNonce: 0,
+  syncClock: null,
   setCurrent: (track) => set({ current: track, progress: Math.max(0, track?.startAt ?? 0) }),
   setQueue: (tracks) => set({ queue: tracks }),
   enqueue: (track) => {
@@ -77,4 +88,5 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setProgress: (s) => set({ progress: Math.max(0, s) }),
   setMaxQueueSize: (n) => set({ maxQueueSize: Math.max(0, Math.floor(n)) }),
   setControl: (c) => set((s) => ({ control: c, controlNonce: s.controlNonce + 1 })),
+  setSyncClock: (c) => set({ syncClock: c }),
 }))

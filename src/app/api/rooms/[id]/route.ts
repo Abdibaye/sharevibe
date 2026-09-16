@@ -10,6 +10,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
   })
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
   const playback = await getPlayback(id)
+  const serverNow = Date.now()
   return NextResponse.json({
     room: {
       ...room,
@@ -20,6 +21,8 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
       isPlaying: playback?.isPlaying ?? false,
       playbackClock: playback?.playbackClock ?? null,
       playbackSeq: playback?.playbackSeq ?? 0,
+      pausedBy: playback?.pausedBy ?? null,
+      serverNow,
     },
   })
 }
@@ -40,7 +43,10 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
   })
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
 
-  const playback = await setPlayback(id, body)
+  const playback = await setPlayback(id, {
+    ...body,
+    pausedBy: body.isPlaying === false ? "user" : body.isPlaying === true ? null : undefined,
+  })
   return NextResponse.json({
     room: {
       ...room,
@@ -51,6 +57,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       isPlaying: playback.isPlaying,
       playbackClock: playback.playbackClock,
       playbackSeq: playback.playbackSeq,
+      pausedBy: playback.pausedBy,
     },
   })
 }
