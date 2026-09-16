@@ -3,11 +3,19 @@
 import { useSessionStore } from '@/stores/sessionStore'
 import { usePlayerStore, Track } from '@/stores/playerStore'
 import { songToTrack } from './queueClient'
+import { extractYouTubeId } from '@/lib/utils'
+import { youtubeThumb } from '@/lib/roomState'
 
 type RoomPayload = {
   room?: {
     id: string
     songs?: Parameters<typeof songToTrack>[0][]
+    playingUrl?: string | null
+    playingTitle?: string | null
+    playingThumb?: string | null
+    livePosition?: number
+    playingAt?: number
+    isPlaying?: boolean
   }
 }
 
@@ -43,6 +51,37 @@ function applySongs(songs: Parameters<typeof songToTrack>[0][] | undefined) {
   return tracks
 }
 
+function applyPlayback(room: NonNullable<RoomPayload["room"]>) {
+  if (!room.playingUrl) return
+  const videoId = extractYouTubeId(room.playingUrl)
+  const position = Math.max(0, room.livePosition ?? room.playingAt ?? 0)
+  const fromQueue = usePlayerStore.getState().queue.find(
+    (t) => t.url === room.playingUrl || extractYouTubeId(t.url) === videoId
+  )
+  const track: Track = {
+    id: videoId || fromQueue?.id || room.playingUrl,
+    dbId: fromQueue?.dbId,
+    title: room.playingTitle || fromQueue?.title || "Now playing",
+    url: room.playingUrl,
+    thumbnailUrl: room.playingThumb || fromQueue?.thumbnailUrl || youtubeThumb(room.playingUrl),
+    artist: fromQueue?.artist,
+    startAt: position,
+  }
+  const player = usePlayerStore.getState()
+  player.setCurrent(track)
+  if (room.isPlaying) player.play()
+  else player.pause()
+  player.setSyncClock({
+    url: room.playingUrl,
+    position,
+    playing: Boolean(room.isPlaying),
+    capturedAt: Date.now(),
+    stall: false,
+    stallReason: null,
+    peers: 1,
+  })
+}
+
 export async function createRoom() {
   const player = usePlayerStore.getState()
   player.clearQueue()
@@ -58,6 +97,7 @@ export async function joinRoom(id: string) {
   if (!room) room = await ensureRoom(id)
   useSessionStore.getState().setRoom({ id: room.id, type: 'db' })
   applySongs(room.songs)
+  applyPlayback(room)
   return { id: room.id, type: 'db' as const }
 }
 
