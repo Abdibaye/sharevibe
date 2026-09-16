@@ -1,16 +1,16 @@
 "use client";
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import NowPlaying from "./NowPlaying";
-import ProgressBar from './ProgressBar';
-import PlaybackControls from './PlaybackControls';
 import { usePlayerStore, type Track } from "@/stores";
 import { enqueue, removeFromQueue, shuffleQueue } from "@/lib/queueClient";
-import { joinRoom } from "@/lib/roomClient";
-import { uuidv4 } from "@/lib/utils";
-import { useSearchParams } from "next/navigation";
+import { createRoom, joinRoom } from "@/lib/roomClient";
+import { extractYouTubeId } from "@/lib/utils";
+import { errorMessage } from "@/lib/auth-user";
+import { getYT, type YTPlayer } from "@/lib/youtubePlayer";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useRealtimeGuestRoom } from "@/hooks/useRealtimeGuestRoom";
-import { Shuffle as ShuffleIcon, Trash2, PlayCircle, Play, Pause } from "lucide-react";
+import { Shuffle as ShuffleIcon, Trash2, Play, Pause } from "lucide-react";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
 
@@ -19,8 +19,8 @@ export default function RoomPage() {
   const setCurrentGlobal = usePlayerStore((s) => s.setCurrent)
   const session = useSessionStore()
   const roomId = session.room?.id
-  const isGuest = session.isGuest()
   const { publishNowPlaying, publishControl } = useRealtimeGuestRoom(roomId)
+  const router = useRouter()
   const [currentSong, setCurrentSong] = useState<Track | null>(null);
   const [inputUrl, setInputUrl] = useState('');
   const [adding, setAdding] = useState(false);
@@ -31,9 +31,10 @@ export default function RoomPage() {
   >([]);
   const [searching, setSearching] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const ytPlayerRef = useRef<any>(null); // YouTube Player instance
+  const ytPlayerRef = useRef<YTPlayer | null>(null); // YouTube Player instance
   const ytPlayerDivRef = useRef<HTMLDivElement | null>(null);
-  const ytProgressTimerRef = useRef<any>(null);
+  const ytProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const playerLoadGenRef = useRef(0)
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoadingPlayback, setIsLoadingPlayback] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -54,27 +55,45 @@ export default function RoomPage() {
   useEffect(() => { queueRef.current = queue }, [queue])
   useEffect(() => { currentSongRef.current = currentSong }, [currentSong])
 
-  // Persist guest (temp) room queue/current in localStorage and restore on refresh
   const STORAGE_KEY = 'guest-room-state'
+
+  const syncPlaying = (playing: boolean) => {
+    setIsPlaying(playing)
+    if (playing) usePlayerStore.getState().play()
+    else usePlayerStore.getState().pause()
+  }
+
+  // Restore persisted guest state only if peers did not already sync a queue
   useEffect(() => {
     const room = session.room
     if (!room || room.type !== 'temp') return
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-      const saved = JSON.parse(raw) as { roomId?: string; queue?: Track[]; currentId?: string }
-      if (saved.roomId !== room.id) return
-      if (Array.isArray(saved.queue) && saved.queue.length) {
-        usePlayerStore.getState().setQueue(saved.queue)
-        const cur = saved.currentId ? saved.queue.find(t => t.id === saved.currentId) ?? null : null
-        if (cur) {
-          setCurrentGlobal(cur)
-          setCurrentSong(cur)
+    const t = setTimeout(() => {
+      const st = usePlayerStore.getState()
+      if ((st.queue?.length ?? 0) > 0 || st.current) return
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY)
+        if (!raw) return
+        const saved = JSON.parse(raw) as { roomId?: string; queue?: Track[]; currentId?: string }
+        if (saved.roomId !== room.id) return
+        if (Array.isArray(saved.queue) && saved.queue.length) {
+          const migrated = saved.queue.map((track) => {
+            const vid = extractYouTubeId(track.url)
+            return vid ? { ...track, id: vid } : track
+          })
+          usePlayerStore.getState().setQueue(migrated)
+          const currentId = saved.currentId && saved.currentId.length !== 11
+            ? extractYouTubeId(migrated.find((x) => x.id === saved.currentId || extractYouTubeId(x.url) === saved.currentId)?.url) ?? saved.currentId
+            : saved.currentId
+          const cur = currentId ? migrated.find((x) => x.id === currentId || extractYouTubeId(x.url) === currentId) ?? null : null
+          if (cur) {
+            setCurrentGlobal(cur)
+            setCurrentSong(cur)
+          }
         }
-      }
-    } catch {}
-  // run when room changes
-  }, [session.room?.id, session.room?.type])
+      } catch {}
+    }, 2000)
+    return () => clearTimeout(t)
+  }, [session.room?.id, session.room?.type, setCurrentGlobal])
 
   useEffect(() => {
     const room = session.room
@@ -89,22 +108,44 @@ export default function RoomPage() {
     } catch {}
   }, [queue, currentFromStore, session.room?.id, session.room?.type])
 
-  const extractVideoId = useCallback((url?: string) => {
-    if (!url) return null;
-    const match = url.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/);
-    return match ? match[1] : null;
-  }, []);
+  const extractVideoId = useCallback((url?: string) => extractYouTubeId(url), []);
 
   const isYouTubeUrl = (url?: string) => !!extractVideoId(url);
 
-  // Auto-join room via ?id= on mount (user: loads DB queue; guest: temp join)
   const searchParams = useSearchParams()
+  const roomQueryId = searchParams.get('id')
+  const bootLockRef = useRef(false)
+  const [sessionHydrated, setSessionHydrated] = useState(false)
   useEffect(() => {
-    const id = searchParams.get('id')
-    if (!id) return
-    joinRoom(id).catch(() => {})
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    const api = useSessionStore.persist
+    if (api.hasHydrated()) setSessionHydrated(true)
+    const unsub = api.onFinishHydration(() => setSessionHydrated(true))
+    return () => { unsub() }
   }, [])
+  useEffect(() => {
+    if (!sessionHydrated && !roomQueryId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const existing = useSessionStore.getState().room
+        if (roomQueryId) {
+          if (existing?.id !== roomQueryId) await joinRoom(roomQueryId)
+          return
+        }
+        if (existing?.id) {
+          router.replace(`/room?id=${existing.id}`)
+          return
+        }
+        if (bootLockRef.current) return
+        bootLockRef.current = true
+        const created = await createRoom()
+        if (!cancelled && created?.id) router.replace(`/room?id=${created.id}`)
+      } catch {
+        bootLockRef.current = false
+      }
+    })()
+    return () => { cancelled = true }
+  }, [roomQueryId, router, sessionHydrated])
 
   // Debounced YouTube search when input is not a URL
   useEffect(() => {
@@ -135,7 +176,7 @@ export default function RoomPage() {
 
   const addVideoToQueue = async (v: { videoId: string; title: string; channelTitle: string; thumbnailUrl: string; duration: string }) => {
     const url = `https://www.youtube.com/watch?v=${v.videoId}`;
-    const track: Track = { id: uuidv4(), title: v.title, artist: "You", url, thumbnailUrl: v.thumbnailUrl }
+    const track: Track = { id: v.videoId, title: v.title, artist: "You", url, thumbnailUrl: v.thumbnailUrl }
     try {
       await enqueue(track)
       // If nothing is playing, immediately start playback; otherwise just enqueue
@@ -145,8 +186,8 @@ export default function RoomPage() {
       setPreview({ title: v.title, channelTitle: v.channelTitle, thumbnailUrl: v.thumbnailUrl, duration: v.duration });
       setInputUrl("");
       setResults([]);
-    } catch (e: any) {
-      const msg = e?.message ?? 'Failed to add to queue'
+    } catch (e: unknown) {
+      const msg = errorMessage(e, 'Failed to add to queue')
       setError(msg)
       if (msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('max')) {
         toast("Queue limit reached", {
@@ -181,15 +222,16 @@ export default function RoomPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed");
         setPreview(data);
-        const track: Track = { id: uuidv4(), title: data.title, artist: "You", url: q, thumbnailUrl: data.thumbnailUrl };
+        const videoId = extractVideoId(q) || q;
+        const track: Track = { id: videoId, title: data.title, artist: "You", url: q, thumbnailUrl: data.thumbnailUrl };
         try {
           await enqueue(track)
           if (!currentSong) {
             // Immediately start playback for first track
             handleSelectSong(track)
           }
-        } catch (e: any) {
-          const msg = e?.message ?? 'Failed to add to queue'
+        } catch (e: unknown) {
+          const msg = errorMessage(e, 'Failed to add to queue')
           setError(msg)
           if (msg.toLowerCase().includes('limit') || msg.toLowerCase().includes('max')) {
             toast("Queue limit reached", {
@@ -204,8 +246,8 @@ export default function RoomPage() {
           }
         }
         setInputUrl("");
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(errorMessage(err, "Failed"));
       } finally {
         setAdding(false);
       }
@@ -223,7 +265,8 @@ export default function RoomPage() {
   // Load YouTube IFrame API once
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if ((window as any).YT && (window as any).YT.Player) return; // already loaded
+    const yt = getYT();
+    if (yt?.Player) return;
     const existing = document.getElementById('youtube-iframe-api');
     if (existing) return;
     const tag = document.createElement('script');
@@ -238,7 +281,7 @@ export default function RoomPage() {
     const cur = currentSongRef.current
     if (!q || q.length === 0) return null
     if (!cur) return q[0] || null
-    const idx = q.findIndex((t) => t.id === cur.id)
+    const idx = q.findIndex((t) => t.id === cur.id || extractYouTubeId(t.url) === extractYouTubeId(cur.url) || t.id === extractYouTubeId(cur.url))
     if (idx === -1) return q[0] || null
     return q[idx + 1] || null
   }
@@ -254,69 +297,91 @@ export default function RoomPage() {
   }
 
   // Helper to ensure player created
-  const loadOrCreatePlayer = (videoId: string, opts?: { userInitiated?: boolean }) => {
+  const loadOrCreatePlayer = (videoId: string, opts?: { userInitiated?: boolean; startAt?: number; shouldPlay?: boolean }) => {
+    const gen = playerLoadGenRef.current
     if (!ytPlayerDivRef.current) {
-      // Container not yet in the DOM; retry soon
-      setTimeout(() => loadOrCreatePlayer(videoId, opts), 50);
+      setTimeout(() => {
+        if (playerLoadGenRef.current !== gen) return
+        loadOrCreatePlayer(videoId, opts)
+      }, 50);
       return;
     }
-    const YTGlobal = (window as any).YT;
+    const YTGlobal = getYT();
     if (!YTGlobal || !YTGlobal.Player) {
-      // Retry shortly until API ready
-      setTimeout(() => loadOrCreatePlayer(videoId, opts), 300);
+      setTimeout(() => {
+        if (playerLoadGenRef.current !== gen) return
+        loadOrCreatePlayer(videoId, opts)
+      }, 300);
       return;
+    }
+    const applyStartAt = () => {
+      if (opts?.startAt && opts.startAt > 0) {
+        try { ytPlayerRef.current?.seekTo?.(opts.startAt, true) } catch {}
+      }
+    }
+    const applyPlaybackIntent = () => {
+      if (opts?.userInitiated) {
+        try { ytPlayerRef.current?.unMute?.(); setIsMuted(false); } catch {}
+        try { ytPlayerRef.current?.playVideo?.() } catch {}
+        return
+      }
+      try { ytPlayerRef.current?.mute?.(); setIsMuted(true); } catch {}
+      if (opts?.shouldPlay === false) {
+        try { ytPlayerRef.current?.pauseVideo?.() } catch {}
+        syncPlaying(false)
+      } else {
+        try { ytPlayerRef.current?.playVideo?.() } catch {}
+      }
     }
     if (ytPlayerRef.current) {
       try {
         ytPlayerRef.current.loadVideoById(videoId);
       } catch {
-        // If load fails due to stale instance, recreate the player safely
         try { ytPlayerRef.current.destroy?.() } catch {}
         ytPlayerRef.current = null
-        // Retry creation after a tick
-        setTimeout(() => loadOrCreatePlayer(videoId, opts), 0)
+        setTimeout(() => {
+          if (playerLoadGenRef.current !== gen) return
+          loadOrCreatePlayer(videoId, opts)
+        }, 0)
         return
       }
-      // For programmatic starts (e.g., remote sync on join), use muted autoplay to satisfy policies
-      if (!opts?.userInitiated) {
-        try { ytPlayerRef.current.mute?.(); setIsMuted(true); } catch {}
-        try { ytPlayerRef.current.playVideo?.() } catch {}
-      } else {
-        // User initiated: ensure unmuted
-        try { ytPlayerRef.current.unMute?.(); setIsMuted(false); } catch {}
-      }
+      applyPlaybackIntent()
+      setTimeout(() => {
+        if (playerLoadGenRef.current !== gen) return
+        applyStartAt()
+        if (opts?.shouldPlay === false) {
+          try { ytPlayerRef.current?.pauseVideo?.() } catch {}
+        }
+      }, 400)
       return;
     }
     ytPlayerRef.current = new YTGlobal.Player(ytPlayerDivRef.current, {
       videoId,
       playerVars: {
-        autoplay: 1,
+        autoplay: opts?.shouldPlay === false ? 0 : 1,
         rel: 0,
         modestbranding: 1,
         playsinline: 1,
       },
       events: {
         onReady: () => {
-          if (!opts?.userInitiated) {
-            try { ytPlayerRef.current?.mute?.(); setIsMuted(true); } catch {}
-            try { ytPlayerRef.current?.playVideo?.() } catch {}
-          } else {
-            try { ytPlayerRef.current?.unMute?.(); setIsMuted(false); } catch {}
-          }
+          if (playerLoadGenRef.current !== gen) return
+          applyStartAt()
+          applyPlaybackIntent()
         },
-        onStateChange: (e: any) => {
+        onStateChange: (e: { data: number }) => {
           if (e.data === YTGlobal.PlayerState.PLAYING) {
-            setIsPlaying(true);
+            syncPlaying(true);
             setIsLoadingPlayback(false);
             startYtProgressTimer();
           } else if (e.data === YTGlobal.PlayerState.PAUSED) {
-            setIsPlaying(false);
+            syncPlaying(false);
             setIsLoadingPlayback(false);
-            // keep timer updating current/total while paused? we'll stop the timer but retain displayed times
           } else if (e.data === YTGlobal.PlayerState.ENDED) {
-            setIsPlaying(false);
+            syncPlaying(false);
             setIsLoadingPlayback(false);
             setProgress(0);
+            usePlayerStore.getState().setProgress(0)
             stopYtProgressTimer();
             setTimeDisplay({ current: '0:00', total: '0:00' });
             if (autoAdvanceRef.current) playNext();
@@ -337,6 +402,7 @@ export default function RoomPage() {
       if (dur && cur != null && dur > 0) {
         setProgress(cur / dur);
         setTotalSeconds(dur);
+        usePlayerStore.getState().setProgress(cur)
         const fmt = (s: number) => {
           if (!isFinite(s)) return '0:00';
           const m = Math.floor(s / 60);
@@ -356,6 +422,7 @@ export default function RoomPage() {
 
   useEffect(() => {
     return () => {
+      playerLoadGenRef.current += 1
       stopYtProgressTimer();
       if (ytPlayerRef.current) {
         try { ytPlayerRef.current.destroy?.(); } catch {}
@@ -366,11 +433,10 @@ export default function RoomPage() {
 
   const handleSelectSong = (song: Track) => {
     setCurrentSong(song);
-    setCurrentGlobal(song)
-    // If guest temp room, broadcast nowPlaying based on YouTube ID
-  if (session.room?.type === 'temp' && song.url) {
+    setCurrentGlobal({ ...song, startAt: 0 })
+    if (session.room && song.url) {
       const vid = extractVideoId(song.url)
-      if (vid) publishNowPlaying({ videoId: vid, timestamp: 0 })
+      if (vid) publishNowPlaying({ videoId: vid, timestamp: 0, playing: true })
     }
     const url = song.url;
     // mp3 playback path
@@ -382,8 +448,8 @@ export default function RoomPage() {
       audioRef.current.src = url;
       setIsLoadingPlayback(true);
       audioRef.current.play()
-        .then(() => setIsPlaying(true))
-        .catch(() => setIsPlaying(false))
+        .then(() => syncPlaying(true))
+        .catch(() => syncPlaying(false))
         .finally(() => setIsLoadingPlayback(false));
   // update time display while playing mp3 via audio events (already handled below)
       return;
@@ -399,18 +465,7 @@ export default function RoomPage() {
       const vid = extractVideoId(url);
       if (vid) {
         setIsLoadingPlayback(true);
-        loadOrCreatePlayer(vid, { userInitiated: true });
-        // If remote provided a startAt, seek after a short delay
-        const startAt = (song as any).startAt as number | undefined
-        if (startAt && startAt > 0) {
-          setTimeout(() => {
-            try {
-              if (ytPlayerRef.current?.seekTo) {
-                ytPlayerRef.current.seekTo(startAt, true)
-              }
-            } catch {}
-          }, 600);
-        }
+        loadOrCreatePlayer(vid, { userInitiated: true, startAt: 0 });
       }
       return;
     }
@@ -450,34 +505,18 @@ export default function RoomPage() {
       setIsLoadingPlayback(false)
       return
     }
-    // If it's the same song but we're paused, try to (re)start playback
-    if (currentSong && currentSong.id === song.id) {
-      const urlSame = song.url
-      if (!isPlaying) {
-        if (urlSame && urlSame.endsWith('.mp3') && audioRef.current) {
-          if (!audioRef.current.src || !audioRef.current.src.includes(urlSame)) {
-            audioRef.current.src = urlSame
-          }
-          setIsLoadingPlayback(true)
-          audioRef.current.play()
-            .then(() => setIsPlaying(true))
-            .catch(() => setIsPlaying(false))
-            .finally(() => setIsLoadingPlayback(false))
-        } else if (urlSame && isYouTubeUrl(urlSame)) {
-          const vid = extractVideoId(urlSame)
-          if (vid) {
-            if (ytPlayerRef.current) {
-              try {
-                setIsLoadingPlayback(true);
-                ytPlayerRef.current.mute?.();
-                setIsMuted(true);
-                ytPlayerRef.current.playVideo?.();
-              } catch {}
-            } else {
-              setIsLoadingPlayback(true)
-              loadOrCreatePlayer(vid, { userInitiated: false })
-            }
-          }
+    const sameTrack = currentSong && (
+      currentSong.id === song.id ||
+      (!!extractVideoId(currentSong.url) && extractVideoId(currentSong.url) === extractVideoId(song.url))
+    )
+    if (sameTrack) {
+      const startAt = song.startAt
+      if (typeof startAt === 'number' && startAt > 0) {
+        if (ytPlayerRef.current?.seekTo) {
+          try { ytPlayerRef.current.seekTo(startAt, true) } catch {}
+        } else if (song.url && isYouTubeUrl(song.url)) {
+          const vid = extractVideoId(song.url)
+          if (vid) loadOrCreatePlayer(vid, { userInitiated: false, startAt, shouldPlay: usePlayerStore.getState().isPlaying })
         }
       }
       return
@@ -490,12 +529,11 @@ export default function RoomPage() {
         stopYtProgressTimer();
       }
       setIsMuted(false);
-      setIsMuted(false);
       audioRef.current.src = url;
       setIsLoadingPlayback(true)
       audioRef.current.play()
-        .then(() => setIsPlaying(true))
-        .catch(() => setIsPlaying(false))
+        .then(() => syncPlaying(true))
+        .catch(() => syncPlaying(false))
         .finally(() => setIsLoadingPlayback(false))
       return;
     }
@@ -508,7 +546,7 @@ export default function RoomPage() {
       setProgress(0);
       setTotalSeconds(undefined);
       const vid = extractVideoId(url);
-      if (vid) { setIsLoadingPlayback(true); loadOrCreatePlayer(vid, { userInitiated: false }); }
+      if (vid) { setIsLoadingPlayback(true); loadOrCreatePlayer(vid, { userInitiated: false, startAt: song.startAt, shouldPlay: usePlayerStore.getState().isPlaying }); }
       return;
     }
     if (audioRef.current) {
@@ -529,33 +567,31 @@ export default function RoomPage() {
       if (!audioRef.current) return;
       if (isPlaying) {
         audioRef.current.pause();
-        setIsPlaying(false);
-  // broadcast pause
-  if (session.room?.type === 'temp') publishControl({ action: 'pause', timestamp: ytPlayerRef.current?.getCurrentTime?.() || audioRef.current.currentTime || 0 })
+        syncPlaying(false);
+        if (session.room) publishControl({ action: 'pause', timestamp: audioRef.current.currentTime || 0 })
       } else {
         setIsLoadingPlayback(true)
         audioRef.current.play()
-          .then(() => setIsPlaying(true))
-          .catch(() => setIsPlaying(false))
+          .then(() => syncPlaying(true))
+          .catch(() => syncPlaying(false))
           .finally(() => setIsLoadingPlayback(false))
-  // broadcast play
-  if (session.room?.type === 'temp') publishControl({ action: 'play', timestamp: audioRef.current.currentTime || 0 })
+        if (session.room) publishControl({ action: 'play', timestamp: audioRef.current.currentTime || 0 })
       }
     } else if (currentSong?.url && isYouTubeUrl(currentSong.url) && ytPlayerRef.current) {
       const state = ytPlayerRef.current.getPlayerState?.();
-      const YTGlobal = (window as any).YT;
+      const YTGlobal = getYT();
+      if (!YTGlobal) return
       if (state === YTGlobal.PlayerState.PLAYING) {
         ytPlayerRef.current.pauseVideo();
-        setIsPlaying(false);
+        syncPlaying(false);
         setIsLoadingPlayback(false)
-  if (session.room?.type === 'temp') publishControl({ action: 'pause', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
+        if (session.room) publishControl({ action: 'pause', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
       } else {
         setIsLoadingPlayback(true)
-        // User initiated toggle: ensure unmuted
         try { ytPlayerRef.current.unMute?.(); setIsMuted(false); } catch {}
         ytPlayerRef.current.playVideo();
-        setIsPlaying(true);
-  if (session.room?.type === 'temp') publishControl({ action: 'play', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
+        syncPlaying(true);
+        if (session.room) publishControl({ action: 'play', timestamp: ytPlayerRef.current.getCurrentTime?.() || 0 })
       }
     }
   };
@@ -588,13 +624,15 @@ export default function RoomPage() {
     if (currentSong?.url?.endsWith('.mp3') && audioRef.current && audioRef.current.duration) {
       const t = pct * audioRef.current.duration
       audioRef.current.currentTime = t;
-      if (session.room?.type === 'temp') publishControl({ action: 'seek', timestamp: t })
+      usePlayerStore.getState().setProgress(t)
+      if (session.room) publishControl({ action: 'seek', timestamp: t })
     } else if (currentSong?.url && isYouTubeUrl(currentSong.url) && ytPlayerRef.current) {
       const dur = ytPlayerRef.current.getDuration?.();
       if (dur) {
         const t = pct * dur
         ytPlayerRef.current.seekTo(t, true);
-        if (session.room?.type === 'temp') publishControl({ action: 'seek', timestamp: t })
+        usePlayerStore.getState().setProgress(t)
+        if (session.room) publishControl({ action: 'seek', timestamp: t })
       }
     }
   };
@@ -605,7 +643,8 @@ export default function RoomPage() {
     const onTime = () => {
       if (!el.duration || isNaN(el.duration)) return;
       setProgress(el.currentTime / el.duration);
-  setTotalSeconds(el.duration);
+      setTotalSeconds(el.duration);
+      usePlayerStore.getState().setProgress(el.currentTime)
       const fmt = (s: number) => {
         if (!isFinite(s)) return '0:00';
         const m = Math.floor(s / 60);
@@ -634,31 +673,36 @@ export default function RoomPage() {
     // Ignore if same message already applied
     if (!control || lastAppliedControlRef.current === controlNonce) return
     lastAppliedControlRef.current = controlNonce
+    const song = currentSong ?? currentFromStore
     const ts = Math.max(0, control.timestamp || 0)
-    if (currentSong?.url?.endsWith('.mp3')) {
+    usePlayerStore.getState().setProgress(ts)
+    if (song?.url?.endsWith('.mp3')) {
       if (!audioRef.current) return
       if (control.action === 'pause') {
         audioRef.current.pause()
-        setIsPlaying(false)
+        syncPlaying(false)
         if (!isNaN(ts)) audioRef.current.currentTime = ts
       } else if (control.action === 'play') {
         if (!isNaN(ts)) audioRef.current.currentTime = ts
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
+        audioRef.current.play().then(() => syncPlaying(true)).catch(() => syncPlaying(false))
       } else if (control.action === 'seek') {
         if (!isNaN(ts)) audioRef.current.currentTime = ts
       }
-    } else if (currentSong?.url && isYouTubeUrl(currentSong.url) && ytPlayerRef.current) {
+    } else if (song?.url && isYouTubeUrl(song.url) && ytPlayerRef.current) {
       if (control.action === 'pause') {
         try { ytPlayerRef.current.pauseVideo() } catch {}
-        setIsPlaying(false)
+        syncPlaying(false)
         if (!isNaN(ts)) ytPlayerRef.current.seekTo?.(ts, true)
       } else if (control.action === 'play') {
         if (!isNaN(ts)) ytPlayerRef.current.seekTo?.(ts, true)
         try { ytPlayerRef.current.playVideo() } catch {}
-        setIsPlaying(true)
+        syncPlaying(true)
       } else if (control.action === 'seek') {
         if (!isNaN(ts)) ytPlayerRef.current.seekTo?.(ts, true)
       }
+    } else if (song?.url && isYouTubeUrl(song.url) && !ytPlayerRef.current) {
+      const vid = extractVideoId(song.url)
+      if (vid) loadOrCreatePlayer(vid, { userInitiated: false, startAt: ts, shouldPlay: control.action !== 'pause' })
     }
   }, [controlNonce])
 
@@ -671,7 +715,7 @@ export default function RoomPage() {
       {/* Now Playing Section */}
       <section className="flex flex-col lg:flex-row items-stretch lg:items-start gap-6 px-4 sm:px-6 py-4 z-10 relative max-w-screen-2xl mx-auto w-full">
         <NowPlaying
-          currentSong={currentSong ? { ...currentSong, addedBy: currentSong.artist ?? (currentSong as any).addedBy } : null}
+          currentSong={currentSong ? { ...currentSong, addedBy: currentSong.artist } : null}
           isPlaying={isPlaying}
           isLoading={isLoadingPlayback}
           isMuted={isMuted}
@@ -739,11 +783,11 @@ export default function RoomPage() {
             </div>
           ) : (
             <ul className="space-y-2 md:space-y-3">
-              {queue.map((item, idx) => {
+              {queue.map((item) => {
                 const active = currentSong && currentSong.id === item.id;
                 return (
                   <li
-                    key={idx}
+                    key={item.id}
                     onClick={() => handleSelectSong(item)}
                     className={`flex items-center gap-3 rounded-lg px-4 py-2 cursor-pointer transition border ${active ? 'bg-gray-700 border-gray-500' : 'bg-gray-900 hover:bg-gray-800 border-transparent'}`}
                   >

@@ -85,8 +85,8 @@ export default function PlaybackControls({
             })(),
             // Thumb color changes when muted
             // Use CSS variable to style vendor-specific thumbs
-            ['--slider-thumb-color' as any]: isMuted || volume === 0 ? 'var(--muted-foreground)' : 'var(--primary)'
-          }}
+            ['--slider-thumb-color']: isMuted || volume === 0 ? 'var(--muted-foreground)' : 'var(--primary)',
+          } as React.CSSProperties}
           aria-label="Volume"
           title={`Volume ${Math.round(volume * 100)}%`}
         />

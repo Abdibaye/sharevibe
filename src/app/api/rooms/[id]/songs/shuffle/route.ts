@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@/generated/prisma'
-import { auth } from '@/lib/auth'
-
-const prisma = new PrismaClient()
+import { prisma } from '@/lib/prisma'
+import { getSessionUserId } from '@/lib/auth-session'
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: roomId } = await context.params
 
-  const session = await auth.api.getSession({ headers: req.headers as any }).catch(() => null as any)
-  const userId = (session as any)?.user?.id ?? (session as any)?.session?.user?.id
+  const userId = await getSessionUserId(req)
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const room = await prisma.room.findUnique({ where: { id: roomId } })
+  if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
 
   const songs = await prisma.song.findMany({ where: { roomId }, orderBy: { position: 'asc' } })
   if (songs.length <= 1) return NextResponse.json({ songs })
 
-  // Fisher-Yates shuffle (keep first song optional? we'll shuffle entire list)
   for (let i = songs.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
     const tmp = songs[i]
@@ -22,7 +21,6 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     songs[j] = tmp
   }
 
-  // Persist new positions
   for (let i = 0; i < songs.length; i++) {
     await prisma.song.update({ where: { id: songs[i].id }, data: { position: i + 1 } })
   }

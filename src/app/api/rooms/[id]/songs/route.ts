@@ -1,24 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@/generated/prisma'
-import { auth } from '@/lib/auth'
-
-const prisma = new PrismaClient()
+import { prisma } from '@/lib/prisma'
+import { getSessionUserId } from '@/lib/auth-session'
+import { extractYouTubeId } from '@/lib/utils'
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: roomId } = await context.params
   const body = await req.json().catch(() => ({}))
-  const { title, url, addedBy } = body as { title?: string; url?: string; addedBy?: string }
+  const { title, url, addedBy, thumbnailUrl } = body as { title?: string; url?: string; addedBy?: string; thumbnailUrl?: string }
   if (!title || !url) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
 
-  const session = await auth.api.getSession({ headers: req.headers as any }).catch(() => null as any)
-  const userId = (session as any)?.user?.id ?? (session as any)?.session?.user?.id
+  const userId = await getSessionUserId(req)
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const room = await prisma.room.findUnique({ where: { id: roomId } })
-  if (!room) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
+  if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
 
   const count = await prisma.song.count({ where: { roomId } })
   if (count >= 20) return NextResponse.json({ error: 'QueueLimitReached' }, { status: 400 })
+
+  const videoId = extractYouTubeId(url)
+  if (videoId) {
+    const existing = await prisma.song.findMany({ where: { roomId } })
+    if (existing.some((s) => extractYouTubeId(s.url) === videoId)) {
+      const song = existing.find((s) => extractYouTubeId(s.url) === videoId)!
+      return NextResponse.json({ song }, { status: 200 })
+    }
+  }
 
   const position = (await prisma.song.aggregate({ _max: { position: true }, where: { roomId } }))._max.position ?? 0
   const song = await prisma.song.create({
@@ -30,25 +37,31 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       roomId,
     },
   })
-  return NextResponse.json({ song }, { status: 201 })
+  return NextResponse.json({ song: { ...song, thumbnailUrl } }, { status: 201 })
 }
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: roomId } = await context.params
   const body = await req.json().catch(() => ({}))
-  const { songId } = body as { songId?: string }
-  if (!songId) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
+  const { songId, videoId } = body as { songId?: string; videoId?: string }
+  if (!songId && !videoId) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
 
-  const session = await auth.api.getSession({ headers: req.headers as any }).catch(() => null as any)
-  const userId = (session as any)?.user?.id ?? (session as any)?.session?.user?.id
+  const userId = await getSessionUserId(req)
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const song = await prisma.song.findFirst({ where: { id: songId, roomId } })
+  const room = await prisma.room.findUnique({ where: { id: roomId } })
+  if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
+
+  const songs = await prisma.song.findMany({ where: { roomId } })
+  const song = songs.find((s) =>
+    s.id === songId ||
+    (videoId && extractYouTubeId(s.url) === videoId) ||
+    (songId && extractYouTubeId(s.url) === songId)
+  )
   if (!song) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
 
-  await prisma.song.delete({ where: { id: songId } })
+  await prisma.song.delete({ where: { id: song.id } })
 
-  // Renumber remaining songs positions
   const remaining = await prisma.song.findMany({ where: { roomId }, orderBy: { position: 'asc' } })
   for (let i = 0; i < remaining.length; i++) {
     if (remaining[i].position !== i + 1) {

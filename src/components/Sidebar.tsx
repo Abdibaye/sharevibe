@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { authClient } from "@/lib/auth-client";
+import { userFromAuthSession } from "@/lib/auth-user";
 
 type Item = {
   label: string;
@@ -53,7 +54,7 @@ function Section({ title, items }: { title: string; items: Item[] }) {
 
 export default function Sidebar() {
   const { data: session } = authClient.useSession?.() ?? { data: null };
-  const user = (session as any)?.user ?? (session as any)?.session?.user;
+  const user = userFromAuthSession(session);
   const signedIn = !!user;
 
   return (

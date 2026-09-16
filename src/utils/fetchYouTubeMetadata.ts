@@ -1,4 +1,15 @@
-import { env } from 'process';
+import { extractYouTubeId } from '@/lib/utils';
+
+function parseDuration(iso?: string) {
+  if (!iso) return '0:00';
+  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return '0:00';
+  const h = parseInt(m[1] || '0', 10);
+  const min = parseInt(m[2] || '0', 10);
+  const sec = parseInt(m[3] || '0', 10);
+  const totalMin = h * 60 + min;
+  return `${totalMin}:${String(sec).padStart(2, '0')}`;
+}
 
 export async function fetchYouTubeMetadata(youtubeUrl: string): Promise<{
   title: string;
@@ -6,9 +17,7 @@ export async function fetchYouTubeMetadata(youtubeUrl: string): Promise<{
   thumbnailUrl: string;
   duration: string;
 }> {
-  // Extract video ID from URL
-  const match = youtubeUrl.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|\/shorts\/)([\w-]{11})/);
-  const videoId = match ? match[1] : null;
+  const videoId = extractYouTubeId(youtubeUrl);
   if (!videoId) {
     throw new Error('Invalid YouTube video URL or ID');
   }
@@ -39,6 +48,6 @@ export async function fetchYouTubeMetadata(youtubeUrl: string): Promise<{
     title: item.snippet.title,
     channelTitle: item.snippet.channelTitle,
     thumbnailUrl: thumbUrl,
-    duration: item.contentDetails.duration,
+    duration: parseDuration(item.contentDetails.duration),
   };
 }
