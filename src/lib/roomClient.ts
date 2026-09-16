@@ -34,10 +34,14 @@ export async function joinRoom(id: string) {
   const player = usePlayerStore.getState()
 
   if (isGuest()) {
+    const previous = useSessionStore.getState().room
     setRoom({ id, type: 'temp' })
     try {
       usePlayerStore.setState({ queue: [], current: null })
     } catch {}
+    if (previous?.id && previous.id !== id) {
+      try { localStorage.removeItem('guest-room-state') } catch {}
+    }
     return { id, type: 'temp' as const }
   }
 

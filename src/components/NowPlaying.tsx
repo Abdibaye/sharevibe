@@ -40,7 +40,6 @@ export default function NowPlaying({
   onVolumeChange,
   isYouTubeUrl,
   audioRef,
-  ytPlayerDivRef,
 }: {
   currentSong: Song | null;
   isPlaying: boolean;
@@ -56,7 +55,6 @@ export default function NowPlaying({
   onVolumeChange: (v: number) => void;
   isYouTubeUrl: (url?: string) => boolean;
   audioRef: React.RefObject<HTMLAudioElement | null>;
-  ytPlayerDivRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const srcType = currentSong?.url
     ? isYouTubeUrl(currentSong.url)
@@ -91,12 +89,6 @@ export default function NowPlaying({
               isPlaying={isPlaying}
               alt={currentSong?.title || "No song"}
               size={140}
-            />
-            <div
-              ref={ytPlayerDivRef}
-              className="absolute -z-10 opacity-0 pointer-events-none"
-              style={{ width: 0, height: 0, overflow: "hidden" }}
-              aria-hidden="true"
             />
           </div>
 

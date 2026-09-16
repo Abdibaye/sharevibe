@@ -19,7 +19,7 @@ export type YTNamespace = {
     el: HTMLElement,
     opts: {
       videoId: string
-      playerVars?: Record<string, number>
+      playerVars?: Record<string, string | number>
       events?: {
         onReady?: () => void
         onStateChange?: (e: { data: number }) => void

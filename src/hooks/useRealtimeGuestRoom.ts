@@ -8,7 +8,7 @@ import { extractYouTubeId, uuidv4 } from '@/lib/utils'
 
 type NowPlayingPayload = {
   videoId: string
-  timestamp?: number // seconds from start
+  timestamp?: number
   playing?: boolean
 }
 
@@ -35,10 +35,16 @@ function trackVideoId(track?: Track | null): string | undefined {
   return extractYouTubeId(track.url) || (track.id.length === 11 ? track.id : undefined)
 }
 
+function envelopeFrom(payload: unknown): EventEnvelope<unknown> | null {
+  if (!payload || typeof payload !== 'object') return null
+  const direct = payload as { senderId?: string; data?: unknown; payload?: EventEnvelope<unknown> }
+  if (direct.senderId && 'data' in direct) return direct as EventEnvelope<unknown>
+  if (direct.payload?.senderId) return direct.payload
+  return null
+}
+
 /**
  * Join a Supabase Realtime channel and sync Zustand playback state.
- * Used for both guest (temp) rooms and signed-in (db) rooms so everyone
- * in the same room ID can listen together.
  */
 export function useRealtimeGuestRoom(roomId?: string | null) {
   const { room } = useSessionStore()
@@ -53,6 +59,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   const muteBroadcastRef = useRef(false)
   const muteNowPlayingBroadcastRef = useRef(false)
   const joinedAtRef = useRef<number>(0)
+  const subscribedRef = useRef(false)
   const metaCacheRef = useRef<Map<string, { title: string; thumbnailUrl?: string; channelTitle?: string }>>(new Map())
 
   const fetchMetaForId = async (videoId: string) => {
@@ -80,9 +87,13 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
     if (!activeRoomId) return
 
     const channelName = `guest-room:${activeRoomId}`
-    const channel = supabase.channel(channelName, { config: { broadcast: { ack: true } } })
+    const channel = supabase.channel(channelName, {
+      config: { broadcast: { ack: true, self: false } },
+    })
     channelRef.current = channel
+    subscribedRef.current = false
     const sid = senderIdRef.current
+    const timers: ReturnType<typeof setTimeout>[] = []
 
     const replyWithState = () => {
       const st = getState.getState()
@@ -118,9 +129,17 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
       }
     }
 
+    const requestSync = () => {
+      channel.send({
+        type: 'broadcast',
+        event: 'sync:request',
+        payload: { senderId: sid, data: { req: true } as SyncRequest } as EventEnvelope<SyncRequest>,
+      })
+    }
+
     channel.on('broadcast', { event: 'queue:update' }, async (payload: unknown) => {
       try {
-        const env = (payload as { payload?: EventEnvelope<QueuePayload> } | null)?.payload as EventEnvelope<QueuePayload>
+        const env = envelopeFrom(payload) as EventEnvelope<QueuePayload> | null
         if (!env || env.senderId === sid) return
         const ids = (env.data.videoIds || []).slice(0, getState.getState().maxQueueSize)
         const existing = getState.getState().queue
@@ -165,7 +184,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
 
     channel.on('broadcast', { event: 'nowPlaying:update' }, async (payload: unknown) => {
       try {
-        const env = (payload as { payload?: EventEnvelope<NowPlayingPayload> } | null)?.payload as EventEnvelope<NowPlayingPayload>
+        const env = envelopeFrom(payload) as EventEnvelope<NowPlayingPayload> | null
         if (!env || env.senderId === sid) return
         const { videoId, timestamp, playing } = env.data
         const currentTrack = getState.getState().current
@@ -199,7 +218,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
 
     channel.on('broadcast', { event: 'control:update' }, (payload: unknown) => {
       try {
-        const env = (payload as { payload?: EventEnvelope<ControlEvent> } | null)?.payload as EventEnvelope<ControlEvent>
+        const env = envelopeFrom(payload) as EventEnvelope<ControlEvent> | null
         if (!env || env.senderId === sid) return
         setControl(env.data)
       } catch {}
@@ -207,41 +226,41 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
 
     channel.on('broadcast', { event: 'sync:request' }, (payload: unknown) => {
       try {
-        const env = (payload as { payload?: EventEnvelope<SyncRequest> } | null)?.payload as EventEnvelope<SyncRequest>
+        const env = envelopeFrom(payload) as EventEnvelope<SyncRequest> | null
         if (!env || env.senderId === sid) return
         replyWithState()
       } catch {}
     })
 
-    channel.subscribe(() => {
-      try {
-        joinedAtRef.current = Date.now()
-        channel.send({
-          type: 'broadcast',
-          event: 'sync:request',
-          payload: { senderId: sid, data: { req: true } as SyncRequest } as EventEnvelope<SyncRequest>,
-        })
-      } catch {}
+    channel.subscribe((status) => {
+      if (status !== 'SUBSCRIBED') return
+      subscribedRef.current = true
+      joinedAtRef.current = Date.now()
+      requestSync()
+      timers.push(setTimeout(requestSync, 700))
+      timers.push(setTimeout(requestSync, 1800))
+      timers.push(setTimeout(() => {
+        const st = getState.getState()
+        if (st.queue.length || st.current) replyWithState()
+      }, JOIN_GRACE_MS))
     })
 
     return () => {
+      subscribedRef.current = false
+      for (const t of timers) clearTimeout(t)
       try { supabase.removeChannel(channel) } catch {}
       channelRef.current = null
     }
   }, [activeRoomId, getState, setQueue, setControl])
 
   useEffect(() => {
-    if (!activeRoomId) return
+    if (!activeRoomId || !subscribedRef.current) return
     if (muteBroadcastRef.current) return
     if (Date.now() - (joinedAtRef.current || 0) < JOIN_GRACE_MS) return
     const sid = senderIdRef.current
     const ids = (queue || [])
       .map((t: Track) => trackVideoId(t))
       .filter(Boolean) as string[]
-    if (ids.length === 0) {
-      const sinceJoin = Date.now() - (joinedAtRef.current || 0)
-      if (sinceJoin < JOIN_GRACE_MS) return
-    }
     channelRef.current?.send({
       type: 'broadcast',
       event: 'queue:update',
@@ -250,7 +269,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
   }, [queue, activeRoomId])
 
   useEffect(() => {
-    if (!activeRoomId) return
+    if (!activeRoomId || !subscribedRef.current) return
     if (muteNowPlayingBroadcastRef.current) return
     if (Date.now() - (joinedAtRef.current || 0) < JOIN_GRACE_MS) return
     const sid = senderIdRef.current
@@ -264,7 +283,7 @@ export function useRealtimeGuestRoom(roomId?: string | null) {
         senderId: sid,
         data: {
           videoId: vid,
-          timestamp: st.progress || current?.startAt || 0,
+          timestamp: typeof st.progress === 'number' ? st.progress : 0,
           playing: st.isPlaying,
         } as NowPlayingPayload,
       } as EventEnvelope<NowPlayingPayload>,

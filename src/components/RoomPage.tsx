@@ -123,7 +123,7 @@ export default function RoomPage() {
     return () => { unsub() }
   }, [])
   useEffect(() => {
-    if (!sessionHydrated && !roomQueryId) return
+    if (!sessionHydrated) return
     let cancelled = false
     ;(async () => {
       try {
@@ -355,13 +355,23 @@ export default function RoomPage() {
       }, 400)
       return;
     }
-    ytPlayerRef.current = new YTGlobal.Player(ytPlayerDivRef.current, {
+    const host = ytPlayerDivRef.current
+    if (!host) {
+      setTimeout(() => {
+        if (playerLoadGenRef.current !== gen) return
+        loadOrCreatePlayer(videoId, opts)
+      }, 50);
+      return;
+    }
+    ytPlayerRef.current = new YTGlobal.Player(host, {
       videoId,
       playerVars: {
         autoplay: opts?.shouldPlay === false ? 0 : 1,
         rel: 0,
         modestbranding: 1,
         playsinline: 1,
+        enablejsapi: 1,
+        origin: window.location.origin,
       },
       events: {
         onReady: () => {
@@ -710,6 +720,9 @@ export default function RoomPage() {
     <div
       className="min-h-screen flex flex-col relative text-white font-sans"
     >
+      {!roomId && (
+        <div className="px-4 sm:px-6 pt-3 text-sm text-muted-foreground">Connecting to room…</div>
+      )}
       {/* Removed top navbar. It's now rendered from the layout via <NavBar /> */}
 
       {/* Now Playing Section */}
@@ -729,7 +742,11 @@ export default function RoomPage() {
           onVolumeChange={setVolume}
           isYouTubeUrl={isYouTubeUrl}
           audioRef={audioRef}
-          ytPlayerDivRef={ytPlayerDivRef}
+        />
+        <div
+          ref={ytPlayerDivRef}
+          className="pointer-events-none fixed bottom-0 right-0 z-0 h-[180px] w-[320px] opacity-[0.01]"
+          aria-hidden="true"
         />
   <div className="w-full lg:max-w-md rounded-xl p-4 sm:p-5 lg:p-6 shadow-lg overflow-y-auto max-h-[55vh] sm:max-h-[60vh] lg:max-h-96 bg-card border border-border order-first lg:order-none">
           {/* Queue Section */}
