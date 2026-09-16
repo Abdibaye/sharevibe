@@ -1,12 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getSessionUserId } from '@/lib/auth-session'
 
-export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function POST(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: roomId } = await context.params
-
-  const userId = await getSessionUserId(req)
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const room = await prisma.room.findUnique({ where: { id: roomId } })
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })

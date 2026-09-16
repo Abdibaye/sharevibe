@@ -2,67 +2,63 @@
 
 import { useSessionStore } from '@/stores/sessionStore'
 import { usePlayerStore, Track } from '@/stores/playerStore'
-import { uuidv4 } from './utils'
 import { songToTrack } from './queueClient'
 
+type RoomPayload = {
+  room?: {
+    id: string
+    songs?: Parameters<typeof songToTrack>[0][]
+  }
+}
+
+async function fetchRoom(id: string) {
+  const res = await fetch(`/api/rooms/${id}`, { cache: 'no-store' })
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error('Room not found')
+  const data: RoomPayload = await res.json()
+  return data.room ?? null
+}
+
+async function ensureRoom(id?: string) {
+  const res = await fetch('/api/rooms/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(id ? { id } : {}),
+  })
+  if (res.ok) {
+    const data: RoomPayload = await res.json()
+    if (!data.room?.id) throw new Error('Failed to create room')
+    return data.room
+  }
+  if (id) {
+    const existing = await fetchRoom(id)
+    if (existing) return existing
+  }
+  throw new Error('Failed to create room')
+}
+
+function applySongs(songs: Parameters<typeof songToTrack>[0][] | undefined) {
+  const tracks: Track[] = (songs ?? []).map(songToTrack)
+  if (tracks.length > 0) usePlayerStore.getState().setQueue(tracks)
+  return tracks
+}
+
 export async function createRoom() {
-  const { isGuest, setRoom, isUser } = useSessionStore.getState()
   const player = usePlayerStore.getState()
-
-  if (isGuest()) {
-    const tempId = uuidv4()
-    setRoom({ id: tempId, type: 'temp' })
-    player.clearQueue()
-    try { localStorage.removeItem('guest-room-state') } catch {}
-    return { id: tempId, type: 'temp' as const }
-  }
-
-  if (isUser()) {
-    const res = await fetch('/api/rooms/create', { method: 'POST' })
-    if (!res.ok) throw new Error('Failed to create room')
-    const data = await res.json()
-    setRoom({ id: data.room.id, type: 'db' })
-    player.clearQueue()
-    return { id: data.room.id, type: 'db' as const }
-  }
-
-  throw new Error('Unknown session mode')
+  player.clearQueue()
+  try { localStorage.removeItem('guest-room-state') } catch {}
+  const room = await ensureRoom()
+  useSessionStore.getState().setRoom({ id: room.id, type: 'db' })
+  applySongs(room.songs)
+  return { id: room.id, type: 'db' as const }
 }
 
 export async function joinRoom(id: string) {
-  const { isGuest, setRoom, isUser } = useSessionStore.getState()
-  const player = usePlayerStore.getState()
-
-  if (isGuest()) {
-    const previous = useSessionStore.getState().room
-    setRoom({ id, type: 'temp' })
-    try {
-      usePlayerStore.setState({ queue: [], current: null })
-    } catch {}
-    if (previous?.id && previous.id !== id) {
-      try { localStorage.removeItem('guest-room-state') } catch {}
-    }
-    return { id, type: 'temp' as const }
-  }
-
-  if (isUser()) {
-    const res = await fetch(`/api/rooms/${id}`)
-    if (res.status === 404) {
-      setRoom({ id, type: 'temp' })
-      try {
-        usePlayerStore.setState({ queue: [], current: null })
-      } catch {}
-      return { id, type: 'temp' as const }
-    }
-    if (!res.ok) throw new Error('Room not found')
-    const data = await res.json()
-    setRoom({ id: data.room.id, type: 'db' })
-    const tracks: Track[] = (data.room.songs ?? []).map(songToTrack)
-    player.setQueue(tracks)
-    return { id: data.room.id, type: 'db' as const }
-  }
-
-  throw new Error('Unknown session mode')
+  let room = await fetchRoom(id)
+  if (!room) room = await ensureRoom(id)
+  useSessionStore.getState().setRoom({ id: room.id, type: 'db' })
+  applySongs(room.songs)
+  return { id: room.id, type: 'db' as const }
 }
 
 export function roomShareUrl(roomId: string) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { getPlayback, setPlayback } from '@/lib/playbackDb'
 
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
@@ -8,5 +9,48 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     include: { songs: { orderBy: { position: 'asc' } } },
   })
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
-  return NextResponse.json({ room })
+  const playback = await getPlayback(id)
+  return NextResponse.json({
+    room: {
+      ...room,
+      playingUrl: playback?.playingUrl ?? null,
+      playingTitle: playback?.playingTitle ?? null,
+      playingThumb: playback?.playingThumb ?? null,
+      playingAt: playback?.playingAt ?? 0,
+      isPlaying: playback?.isPlaying ?? false,
+      playbackClock: playback?.playbackClock ?? null,
+      playbackSeq: playback?.playbackSeq ?? 0,
+    },
+  })
+}
+
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
+  const body = await req.json().catch(() => ({})) as {
+    playingUrl?: string | null
+    playingTitle?: string | null
+    playingThumb?: string | null
+    playingAt?: number
+    isPlaying?: boolean
+  }
+
+  const room = await prisma.room.findUnique({
+    where: { id },
+    include: { songs: { orderBy: { position: 'asc' } } },
+  })
+  if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
+
+  const playback = await setPlayback(id, body)
+  return NextResponse.json({
+    room: {
+      ...room,
+      playingUrl: playback.playingUrl,
+      playingTitle: playback.playingTitle,
+      playingThumb: playback.playingThumb,
+      playingAt: playback.playingAt,
+      isPlaying: playback.isPlaying,
+      playbackClock: playback.playbackClock,
+      playbackSeq: playback.playbackSeq,
+    },
+  })
 }

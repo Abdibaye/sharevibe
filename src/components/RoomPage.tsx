@@ -9,7 +9,7 @@ import { errorMessage } from "@/lib/auth-user";
 import { getYT, type YTPlayer } from "@/lib/youtubePlayer";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useRealtimeGuestRoom } from "@/hooks/useRealtimeGuestRoom";
+import { useRoomSync } from "@/hooks/useRoomSync";
 import { Shuffle as ShuffleIcon, Trash2, Play, Pause } from "lucide-react";
 import { toast } from "sonner";
 import { authClient } from "@/lib/auth-client";
@@ -19,7 +19,7 @@ export default function RoomPage() {
   const setCurrentGlobal = usePlayerStore((s) => s.setCurrent)
   const session = useSessionStore()
   const roomId = session.room?.id
-  const { publishNowPlaying, publishControl } = useRealtimeGuestRoom(roomId)
+  const { publishNowPlaying, publishControl } = useRoomSync(roomId)
   const router = useRouter()
   const [currentSong, setCurrentSong] = useState<Track | null>(null);
   const [inputUrl, setInputUrl] = useState('');

@@ -6,12 +6,10 @@ import { extractYouTubeId } from '@/lib/utils'
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id: roomId } = await context.params
   const body = await req.json().catch(() => ({}))
-  const { title, url, addedBy, thumbnailUrl } = body as { title?: string; url?: string; addedBy?: string; thumbnailUrl?: string }
+  const { title, url, addedBy } = body as { title?: string; url?: string; addedBy?: string }
   if (!title || !url) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
 
   const userId = await getSessionUserId(req)
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
   const room = await prisma.room.findUnique({ where: { id: roomId } })
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
 
@@ -21,10 +19,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
   const videoId = extractYouTubeId(url)
   if (videoId) {
     const existing = await prisma.song.findMany({ where: { roomId } })
-    if (existing.some((s) => extractYouTubeId(s.url) === videoId)) {
-      const song = existing.find((s) => extractYouTubeId(s.url) === videoId)!
-      return NextResponse.json({ song }, { status: 200 })
-    }
+    const dup = existing.find((s) => extractYouTubeId(s.url) === videoId)
+    if (dup) return NextResponse.json({ song: dup }, { status: 200 })
   }
 
   const position = (await prisma.song.aggregate({ _max: { position: true }, where: { roomId } }))._max.position ?? 0
@@ -32,12 +28,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     data: {
       title,
       url,
-      addedBy: addedBy ?? userId,
+      addedBy: addedBy ?? userId ?? 'Guest',
       position: position + 1,
       roomId,
     },
   })
-  return NextResponse.json({ song: { ...song, thumbnailUrl } }, { status: 201 })
+  return NextResponse.json({ song }, { status: 201 })
 }
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -45,9 +41,6 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   const body = await req.json().catch(() => ({}))
   const { songId, videoId } = body as { songId?: string; videoId?: string }
   if (!songId && !videoId) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
-
-  const userId = await getSessionUserId(req)
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const room = await prisma.room.findUnique({ where: { id: roomId } })
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
