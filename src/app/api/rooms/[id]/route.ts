@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getPlayback, setPlayback } from '@/lib/playbackDb'
+import { getPlayback, livePosition, setPlayback } from '@/lib/playbackDb'
 
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
@@ -11,6 +11,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
   if (!room || !room.isActive) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
   const playback = await getPlayback(id)
   const serverNow = Date.now()
+  const live = playback ? livePosition(playback, serverNow) : 0
   return NextResponse.json({
     room: {
       ...room,
@@ -18,6 +19,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
       playingTitle: playback?.playingTitle ?? null,
       playingThumb: playback?.playingThumb ?? null,
       playingAt: playback?.playingAt ?? 0,
+      livePosition: live,
       isPlaying: playback?.isPlaying ?? false,
       playbackClock: playback?.playbackClock ?? null,
       playbackSeq: playback?.playbackSeq ?? 0,
