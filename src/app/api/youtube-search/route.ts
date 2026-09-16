@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
+import { clientKey, rateLimit } from "@/lib/rateLimit";
 
 export async function GET(req: Request) {
+  const limited = rateLimit(clientKey(req, "yt-search"), 20, 60_000)
+  if (!limited.ok) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 })
+  }
+
   const { searchParams } = new URL(req.url);
   const q = searchParams.get("q")?.trim();
   if (!q) return NextResponse.json([]);
@@ -18,15 +24,15 @@ export async function GET(req: Request) {
     if (!searchRes.ok) throw new Error(searchJson?.error?.message || "YouTube search failed");
 
     const items = searchJson.items || [];
-    const ids = items.map((it: any) => it.id?.videoId).filter(Boolean).join(",");
-    let durations: Record<string, string> = {};
+    const ids = items.map((it: { id?: { videoId?: string } }) => it.id?.videoId).filter(Boolean).join(",");
+    const durations: Record<string, string> = {};
     if (ids) {
       const vidsRes = await fetch(
         `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${key}`
       );
       const vidsJson = await vidsRes.json();
-      (vidsJson.items || []).forEach((it: any) => {
-        durations[it.id] = it.contentDetails?.duration;
+      (vidsJson.items || []).forEach((it: { id: string; contentDetails?: { duration?: string } }) => {
+        durations[it.id] = it.contentDetails?.duration || "";
       });
     }
 
@@ -41,7 +47,7 @@ export async function GET(req: Request) {
       return `${totalMin}:${String(sec).padStart(2, "0")}`;
     };
 
-    const results = items.map((it: any) => {
+    const results = items.map((it: { id: { videoId: string }; snippet?: { title?: string; channelTitle?: string; thumbnails?: { medium?: { url?: string }; default?: { url?: string } } } }) => {
       const id = it.id.videoId;
       const sn = it.snippet;
       return {
@@ -54,7 +60,8 @@ export async function GET(req: Request) {
     });
 
     return NextResponse.json(results);
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "YouTube search failed";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

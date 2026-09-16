@@ -1,17 +1,24 @@
+import { clsx, type ClassValue } from "clsx"
+import { twMerge } from "tailwind-merge"
+
 export function uuidv4() {
   // RFC4122 v4, using crypto if available
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID()
   }
-  const tpl = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
+  const tpl = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
   return tpl.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0
-    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    const v = c === "x" ? r : (r & 0x3) | 0x8
     return v.toString(16)
   })
 }
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+
+export function extractYouTubeId(url?: string | null): string | null {
+  if (!url) return null
+  const match = url.match(/(?:v=|youtu\.be\/|embed\/|\/v\/|shorts\/)([\w-]{11})/)
+  return match ? match[1] : null
+}
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

@@ -4,7 +4,8 @@ import { create } from 'zustand'
 
 // Simple player store: current track, playing state, volume, and progress
 export type Track = {
-  id: string
+  id: string // YouTube video ID when the track is a YouTube video
+  dbId?: string // Prisma song id when persisted in a DB room
   title: string
   artist?: string
   thumbnailUrl?: string
@@ -47,10 +48,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   maxQueueSize: 5, // default for guests; session store will bump to 20 for users
   control: null,
   controlNonce: 0,
-  setCurrent: (track) => set({ current: track, progress: 0 }),
+  setCurrent: (track) => set({ current: track, progress: Math.max(0, track?.startAt ?? 0) }),
   setQueue: (tracks) => set({ queue: tracks }),
   enqueue: (track) => {
     const s = get()
+    if (s.queue.some((t) => t.id === track.id)) return true
     if (s.queue.length >= s.maxQueueSize) return false
     set({ queue: [...s.queue, track] })
     return true
@@ -67,7 +69,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
       return { queue: newQueue, current: newCurrent }
     }),
-  clearQueue: () => set((s) => ({ queue: [], current: null })),
+  clearQueue: () => set({ queue: [], current: null }),
   play: () => set({ isPlaying: true }),
   pause: () => set({ isPlaying: false }),
   toggle: () => set({ isPlaying: !get().isPlaying }),

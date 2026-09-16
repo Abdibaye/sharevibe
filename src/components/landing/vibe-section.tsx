@@ -24,7 +24,7 @@ export function VibeSection() {
 
         {/* Emotional hook */}
         <h2 className="text-5xl md:text-7xl font-bold text-balance leading-tight">
-          Music hits different when it's <span className="text-accent">shared</span>.
+          Music hits different when it&apos;s <span className="text-accent">shared</span>.
         </h2>
       </div>
     </section>

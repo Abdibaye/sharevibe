@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@/generated/prisma'
-import { auth } from '@/lib/auth'
-
-const prisma = new PrismaClient()
+import { prisma } from '@/lib/prisma'
+import { getSessionUserId } from '@/lib/auth-session'
 
 async function assertOwner(req: NextRequest, id: string) {
-  const session = await auth.api.getSession({ headers: req.headers as any }).catch(() => null as any)
-  const userId = (session as any)?.user?.id ?? (session as any)?.session?.user?.id
+  const userId = await getSessionUserId(req)
   if (!userId) return { status: 401 as const, userId: null, json: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
   const pl = await prisma.playlist.findUnique({ where: { id }, select: { ownerId: true } })
   if (!pl || pl.ownerId !== userId) return { status: 403 as const, userId, json: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
@@ -36,6 +33,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   if (authz.status !== 200) return authz.json
   const itemId = new URL(req.url).searchParams.get('itemId')
   if (!itemId) return NextResponse.json({ error: 'BadRequest' }, { status: 400 })
-  await prisma.playlistItem.delete({ where: { id: itemId } })
+  const deleted = await prisma.playlistItem.deleteMany({ where: { id: itemId, playlistId } })
+  if (deleted.count === 0) return NextResponse.json({ error: 'NotFound' }, { status: 404 })
   return NextResponse.json({ ok: true })
 }

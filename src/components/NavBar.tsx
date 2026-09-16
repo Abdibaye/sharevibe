@@ -7,7 +7,8 @@ import { Badge } from "./ui/badge";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { useSessionStore } from "@/stores";
-import { createRoom, joinRoom } from "@/lib/roomClient";
+import { createRoom, joinRoom, roomShareUrl } from "@/lib/roomClient";
+import { userFromAuthSession, type AuthUser } from "@/lib/auth-user";
 import {
   Dialog,
   DialogContent,
@@ -42,7 +43,6 @@ export default function NavBar({
   roomName = " Guest Room",
   roomCode,
   onCopy,
-  coffeeUrl = "https://buymeacoffee.com/yourname",
 }: NavBarProps) {
   const [copied, setCopied] = useState(false);
   const sessionRoom = useSessionStore((s) => s.room)
@@ -52,7 +52,7 @@ export default function NavBar({
 
   // Session (shows avatar + first name if logged in)
   const { data: session, isPending: sessionLoading } = authClient.useSession?.() ?? { data: null, isPending: false };
-  const user = (session as any)?.user ?? (session as any)?.session?.user;
+  const user = userFromAuthSession(session);
   const firstName =
     user?.name?.split(" ")?.[0] ??
     user?.email?.split("@")?.[0] ??
@@ -60,24 +60,27 @@ export default function NavBar({
 
   const handleCopy = async () => {    
     if (onCopy) return onCopy();
+    if (!sessionRoom?.id) return
     try {
-      await navigator.clipboard.writeText(effectiveRoomId);
+      await navigator.clipboard.writeText(roomShareUrl(sessionRoom.id));
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {}
   };
 
   const handleShare = async () => {
+    if (!sessionRoom?.id) return
+    const url = roomShareUrl(sessionRoom.id)
     const shareData = {
       title: `${title} • ${roomName}`,
-      text: `Join my room: ${effectiveRoomId}`,
-      url: typeof window !== "undefined" ? window.location.href : undefined,
+      text: `Join my room on ShareVibe`,
+      url,
     };
     try {
       if (navigator.share) {
         await navigator.share(shareData);
       } else {
-        await navigator.clipboard.writeText(effectiveRoomId);
+        await navigator.clipboard.writeText(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }
@@ -87,8 +90,7 @@ export default function NavBar({
   const handleCreateRoom = async () => {
     try {
       const r = await createRoom()
-      // Optionally navigate to /room/[id]
-      // router.push(`/room?id=${r.id}`)
+      router.push(`/room?id=${r.id}`)
     } catch (e) {
       console.error(e)
     }
@@ -111,7 +113,7 @@ export default function NavBar({
     try {
       await joinRoom(id)
       setJoinOpen(false)
-      // router.push(`/room?id=${id}`)
+      router.push(`/room?id=${id}`)
     } catch (e) {
       setJoinErr((e as Error).message)
     } finally {
@@ -127,7 +129,7 @@ export default function NavBar({
         callbackURL: "/room",
       });
       // Likely redirects; pending state will be irrelevant post-redirect
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Google sign-in error:", error);
     } finally {
       setIsGooglePending(false);
@@ -150,7 +152,7 @@ export default function NavBar({
   const handleLogout = async () => {
     try {
       await authClient.signOut()
-    } catch (e) {
+    } catch {
       // ignore
     } finally {
       try { useSessionStore.getState().reset() } catch {}
@@ -201,7 +203,7 @@ export default function NavBar({
           </Dialog>
 
           {/* Room ID copy/share */}
-          {(() => {
+          {sessionRoom?.id && (() => {
             const displayRoomId = effectiveRoomId.length > 20 ? `${effectiveRoomId.slice(0, 8)}…${effectiveRoomId.slice(-4)}` : effectiveRoomId
             return (
               <Button
@@ -209,14 +211,15 @@ export default function NavBar({
                 variant="outline"
                 onClick={handleCopy}
                 className="font-mono hidden md:inline-flex max-w-[210px] truncate"
-                aria-label="Copy room ID"
-                title={`Copy room ID: ${effectiveRoomId}`}
+                aria-label="Copy room link"
+                title={`Copy room link: ${roomShareUrl(sessionRoom.id)}`}
               >
                 {copied ? <Check className="mr-2 h-4 w-4 shrink-0" /> : <Copy className="mr-2 h-4 w-4 shrink-0" />}
                 <span className="truncate">{displayRoomId}</span>
               </Button>
             )
           })()}
+          {sessionRoom?.id && (
           <Button
             size="sm"
             variant="ghost"
@@ -226,6 +229,7 @@ export default function NavBar({
           >
             <Share2 className="h-4 w-4" />
           </Button>
+          )}
 
           {/* Auth */}
           {sessionLoading ? (
@@ -319,7 +323,7 @@ function MobileMenu({
   onOpenJoin: () => void
   onCopy: () => void
   onShare: () => void
-  user: any
+  user: AuthUser | null
   firstName: string
   onLogout: () => void
   isGooglePending: boolean

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { clientKey, rateLimit } from '@/lib/rateLimit'
 
 type Meta = {
   title: string
@@ -7,7 +8,19 @@ type Meta = {
   duration: string
 }
 
+type Thumbnails = {
+  maxres?: { url?: string }
+  standard?: { url?: string }
+  high?: { url?: string }
+  medium?: { url?: string }
+  default?: { url?: string }
+}
+
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(clientKey(req, 'yt-meta-batch'), 20, 60_000)
+  if (!limited.ok) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 })
+  }
   try {
     const body = await req.json().catch(() => ({}))
     const ids: string[] = Array.isArray(body?.ids) ? body.ids.filter((s: unknown) => typeof s === 'string') : []
@@ -16,7 +29,7 @@ export async function POST(req: NextRequest) {
     const key = process.env.YOUTUBE_API_KEY
     if (!key) return NextResponse.json({ error: 'Missing YOUTUBE_API_KEY' }, { status: 500 })
 
-    const uniq = Array.from(new Set(ids)).slice(0, 50) // API limit safety
+    const uniq = Array.from(new Set(ids)).slice(0, 50)
     const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${uniq.join(',')}&key=${key}`
     const r = await fetch(url)
     const j = await r.json()
@@ -25,7 +38,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: msg }, { status: 500 })
     }
     const out: Record<string, Meta> = {}
-    const pickThumb = (thumbs: any): string | undefined =>
+    const pickThumb = (thumbs: Thumbnails | undefined): string | undefined =>
       thumbs?.maxres?.url || thumbs?.standard?.url || thumbs?.high?.url || thumbs?.medium?.url || thumbs?.default?.url
 
     for (const it of j.items || []) {
@@ -37,7 +50,8 @@ export async function POST(req: NextRequest) {
       }
     }
     return NextResponse.json(out)
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Failed to fetch batch metadata' }, { status: 500 })
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Failed to fetch batch metadata'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
